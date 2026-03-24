@@ -1,0 +1,174 @@
+Eres un agente senior full-stack. Vas a implementar en mi app un sistema de:
+1) Notificaciones (in-app) ligadas a Proyecto + Actor (quien asigna) + Entity (tarea/comentario/etc).
+2) Chat interno por proyecto (conversaciones tipo “project channels”).
+3) En el chat, ability de “adjuntar”/linkear objetos del sistema: Proyecto y Tarea (message_links).
+
+OBJETIVO MVP (prioridad):
+A. Notificaciones in-app para evento: task_assigned
+B. Chat por proyecto con mensajes en tiempo real
+C. Link de tarea/proyecto dentro de mensajes (chips + deep links)
+D. UI básica: Campana de notificaciones + Pantalla de chat por proyecto + Adjuntar referencia
+
+REGLAS DE PRODUCTO:
+- Cada notificación debe tener: recipient_id, actor_id, project_id (si aplica), entity_type, entity_id, type, payload JSON, read_at, created_at.
+- Las notificaciones deben abrir (deep link) al objeto: si entity_type=task -> abrir TaskDetail dentro del Project.
+- Permisos: un usuario solo puede ver proyectos donde es miembro. Igual para conversaciones y mensajes.
+- Chat: modelo base “conversation per project”. No DM todavía.
+- Mensajes pueden tener 0..N links (message_links) a entity_type = project|task.
+- Debe existir “last_read_at” por miembro para unread counts.
+
+STACK / CONVENCIONES:
+- Usa Supabase (Postgres + RLS + realtime) para backend, auth y realtime.
+- Si ya existe auth, reutilízalo. Si no existe, agrega Supabase Auth Email/Password mínimo.
+- Frontend: usa la stack actual del repo (si es React/Next/Vite, sigue lo existente). Mantén UI simple, limpia, responsive.
+- No inventes librerías raras. Usa lo que ya esté instalado. Si necesitas algo, justifica.
+- Implementa migraciones SQL claras y RLS estricta.
+
+ENTIDADES / TABLAS (crear si no existen):
+1) projects (id, name, created_at)
+2) project_members (project_id, user_id, role, created_at)
+
+3) tasks (id, project_id, title, description, status, assigned_to, created_by, due_date, created_at)
+
+4) notifications (
+   id uuid pk,
+   recipient_id uuid references auth.users,
+   actor_id uuid references auth.users,
+   project_id uuid references projects,
+   entity_type text, -- 'task' | 'project'
+   entity_id uuid,
+   type text,        -- 'task_assigned' etc
+   payload jsonb,
+   read_at timestamptz null,
+   created_at timestamptz default now()
+)
+
+5) conversations (
+   id uuid pk,
+   project_id uuid references projects,
+   type text default 'project', -- for future: dm/group
+   name text null,
+   created_at timestamptz default now()
+)
+
+6) conversation_members (
+   conversation_id uuid references conversations,
+   user_id uuid references auth.users,
+   role text,
+   last_read_at timestamptz default now(),
+   created_at timestamptz default now(),
+   primary key (conversation_id, user_id)
+)
+
+7) messages (
+   id uuid pk,
+   conversation_id uuid references conversations,
+   sender_id uuid references auth.users,
+   body text,
+   created_at timestamptz default now()
+)
+
+8) message_links (
+   id uuid pk,
+   message_id uuid references messages,
+   entity_type text, -- 'project'|'task'
+   entity_id uuid,
+   project_id uuid null,
+   created_at timestamptz default now()
+)
+
+RLS (muy importante):
+- projects: select solo si user es miembro via project_members.
+- project_members: select solo si pertenece al mismo project donde es miembro (o si role admin).
+- tasks: select/insert/update solo si user es miembro del proyecto.
+- notifications: select/update solo si recipient_id = auth.uid().
+- conversations: select solo si user es miembro del proyecto (o miembro conversation_members).
+- conversation_members: select solo si user pertenece a esa conversation.
+- messages: select/insert solo si user es miembro de esa conversation.
+- message_links: select solo si user puede ver el message.
+
+TRIGGERS / FUNCIONES:
+1) Trigger en tasks: cuando assigned_to cambia (o al crear tarea con assigned_to):
+   - insertar en notifications con:
+     recipient_id = assigned_to
+     actor_id = auth.uid() (o created_by si se hace server-side)
+     project_id = tasks.project_id
+     entity_type='task'
+     entity_id = tasks.id
+     type='task_assigned'
+     payload: { "task_title": ..., "project_name": ... }
+2) (Opcional MVP+) También crear un mensaje automático en chat del proyecto:
+   “X asignó la tarea Y a Z” con un message_link a task_id
+
+REALTIME:
+- Suscripciones realtime a:
+  - notifications (para badge live y lista)
+  - messages (para chat live)
+- Implementa paginación simple en mensajes (últimos 50, cargar más).
+
+UI / PANTALLAS:
+1) NotificationsBell (navbar):
+   - badge de no leídas
+   - dropdown/lista con últimas 20
+   - al abrir, marcar como leídas (o click individual)
+   - click notificación -> navegar al TaskDetail / Project
+
+2) ProjectChat:
+   - lista mensajes con autor + timestamp
+   - input para enviar
+   - botón “Adjuntar” que abre modal:
+     - tabs: “Tareas del proyecto” y “Proyecto”
+     - seleccionar uno o varios -> se agrega como chips preview en el composer
+   - al enviar, guardar message + message_links
+
+3) TaskDetail:
+   - muestra info de tarea
+   - muestra activity mínima (quién asignó) usando notifications o task fields
+   - botón “Ir al chat del proyecto”
+
+SEEDS / DATOS:
+- Crea un script o instrucciones para:
+  - crear proyecto
+  - añadir miembros
+  - crear conversación por proyecto automáticamente cuando se crea el proyecto (trigger o lógica app)
+
+ENTREGABLES:
+- Migraciones SQL (con triggers + RLS policies)
+- Componentes UI y rutas
+- Explicación breve en README:
+  - cómo configurar Supabase env vars
+  - cómo correr migraciones
+  - cómo probar: crear proyecto, crear tarea, asignar, ver noti, abrir chat, enviar mensaje con link
+
+RESTRICCIONES:
+- No implementes push mobile todavía; solo in-app.
+- No DM.
+- Mantén el scope en MVP funcional y limpio.
+- No dejes TODOs críticos sin resolver.
+
+PASOS:
+1) Inspecciona repo actual y describe stack.
+2) Propón plan de implementación por etapas.
+3) Implementa DB (migraciones + RLS).
+4) Implementa backend calls (Supabase client).
+5) Implementa UI.
+6) Pruebas manuales: checklist final.
+
+IMPORTANTE – NO ALTERAR FUNCIONALIDAD EXISTENTE:
+- No modificar, eliminar ni alterar ninguna funcionalidad, componente, flujo, diseño o lógica que ya exista en la aplicación.
+- No cambiar estilos globales existentes.
+- No refactorizar código actual salvo que sea estrictamente necesario y sin romper comportamiento actual.
+- Todo lo nuevo debe ser modular y desacoplado.
+
+UBICACIÓN EN SIDEBAR:
+- Tanto el acceso a Notificaciones como el acceso al Chat deben ir en el Sidebar principal de la aplicación.
+- No usar navbar superior para estas funcionalidades.
+- Debe agregarse un ítem “Notificaciones” y un ítem “Mensajes” (o “Chat”) en el Sidebar.
+
+BADGES / INDICADORES VISUALES:
+- Si existen notificaciones no leídas, debe mostrarse un circulito (badge) con contador en el ítem “Notificaciones” del Sidebar.
+- Si existen mensajes no leídos en conversaciones del usuario, debe mostrarse un circulito (badge) con contador en el ítem “Mensajes” del Sidebar.
+- Los badges deben actualizarse en tiempo real usando suscripciones realtime.
+- Al entrar a la sección correspondiente y marcar como leídas, el contador debe actualizarse inmediatamente.
+
+Empieza ahora con el paso 1: inspecciona el repo y dime qué stack detectas y dónde vas a insertar cada parte.

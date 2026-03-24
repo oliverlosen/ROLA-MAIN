@@ -1,0 +1,143 @@
+You are an expert full-stack engineer + product designer. Build a production-quality web platform for an internal company tool named “ROLA Pulse” (ROLA Entertainment). The tool replaces Excel-based marketing project tracking and consolidates everything into a database + dashboards with filters + workflow tracking + media value reporting in USD.
+
+MAIN GOALS
+1) Visibility of marketing actions (what was done, where, when, by whom)
+2) Quantify “media noise” (Media Value) translated into USD$
+3) Track the steps of the process (workflow)
+4) Automate and consolidate the database (single source of truth), including import from the current Excel.
+
+TARGET REGION
+Central America (Guatemala, El Salvador, Honduras, Nicaragua, Costa Rica, Panama, Belize) + optional “Regional”.
+
+CORE ENTITY (what they currently store in Excel)
+Each record is an “Execution” (marketing activation / publicity / third party activity), with fields:
+- country (Central America list)
+- brand
+- title (movie / campaign name)
+- studio (optional)
+- execution_date (date of execution)
+- execution_type (enum: Canje, Publicity, Third Party)
+- media_value_local (number)
+- local_currency (enum: GTQ, USD, HNL, NIO, CRC, PAB, BZD, SVC optional)
+- fx_rate_used (number)
+- fx_source (string)
+- fx_date (date)
+- media_value_usd (computed, stored)
+- assets (one-to-many: links/files, with type: photo, video, clipping, post, contract, other)
+- notes (text)
+- owner (user responsible)
+- status (workflow enum)
+- created_at, updated_at, created_by, updated_by
+
+WORKFLOW (Process Tracking)
+Implement a clear workflow with statuses:
+- Draft
+- In Review
+- Approved
+- Executed
+- Evidence Uploaded
+- Closed/Reported
+Add:
+- due_date (optional)
+- checklist flags (boolean): has_clipping, has_photos, has_links, has_invoice (for third party), has_contract (optional)
+- status_history table to log changes (status, changed_by, changed_at)
+
+ROLES & PERMISSIONS
+Auth required. Roles:
+- Admin: manage users, catalogs, FX defaults, and system settings
+- Editor: create/edit executions, upload/add assets
+- Approver: approve and close/report
+- Viewer: read-only dashboards and records
+Enforce permissions in UI and backend.
+
+DASHBOARDS & FILTERS (Global filters apply to all charts)
+Create a dashboard that supports global filters:
+- date range (execution_date)
+- country (multi-select)
+- brand (multi-select)
+- execution_type (multi-select)
+- title (multi-select)
+- studio (multi-select)
+- owner (multi-select)
+- status (multi-select)
+Dashboard KPIs:
+- Total Media Value USD (sum)
+- Number of executions
+- Average Media Value USD per execution
+- Percent by execution type
+- Pipeline health: counts by status (Draft/In Review/Approved/Executed/Evidence Uploaded/Closed)
+Charts (interactive):
+- Trend over time (weekly/monthly) of Media Value USD
+- Top Countries by Media Value USD
+- Top Brands by Media Value USD
+- Breakdown by Execution Type (pie or stacked bar)
+- Status pipeline (bar)
+All charts must update when filters change.
+
+DATA QUALITY & CATALOGS
+To prevent Excel inconsistencies:
+- Use catalogs (tables) for countries, brands, titles, studios, execution types.
+- Provide Admin screens to add/edit catalogs.
+- In the execution form, use searchable dropdowns for catalogs (with “create new” only for Admin or Editor with approval).
+- Validate required fields: country, brand, execution_date, execution_type, media_value_local, local_currency.
+- Prevent duplicates optionally: same (country+brand+execution_date+execution_type+title) show warning.
+
+USD CALCULATION RULES
+media_value_usd = media_value_local / fx_rate_used if local_currency != USD, else equals local value.
+Allow user to input fx_rate_used manually, but also include a “default FX rate by month” setting (Admin) to speed entry.
+Store fx_rate_used, fx_source, fx_date for auditability.
+
+IMPORT / EXPORT
+- Provide an “Import from Excel/CSV” page for Admin:
+  - Upload CSV exported from Excel.
+  - Map columns (country, brand, media_value, media_value_usd, execution_date, execution_type, assets, etc.)
+  - Validate rows, show preview, then import.
+- Provide export functionality:
+  - Export filtered results to CSV (Excel-friendly)
+  - Export dashboard summary (CSV at least). PDF export is optional.
+
+RECORDS VIEW (Operations)
+Create a main “Executions” page:
+- Table view with pagination, sorting, and the same global filters as dashboard
+- Quick actions: change status, add evidence, add asset links
+- Detail page: show all fields + asset gallery list + status history timeline
+
+ASSETS
+Assets should be stored as:
+- URL links (Google Drive, social posts, press links) and/or file uploads.
+If file upload is implemented, store files using a simple local storage folder for MVP OR a cloud bucket if available. If difficult, do URL-only but design UI to support both.
+Each asset has: type, url or file reference, description, uploaded_by, uploaded_at.
+
+TECH STACK REQUIREMENTS (choose a clean modern stack that runs well on Replit)
+- Use a monorepo or simple structure.
+- Frontend: React + TypeScript + Tailwind (or Next.js if preferred).
+- Backend: Node.js (Express or Next API routes).
+- Database: PostgreSQL (preferably via Prisma ORM). If Postgres is not available, use SQLite for MVP but keep ORM so it can migrate to Postgres easily.
+- Auth: use a straightforward auth approach (JWT sessions) with hashed passwords. Seed an Admin user on first run.
+- UI: clean, internal tool style. Must be fast and usable. Use components for filters, tables, modals.
+
+NON-FUNCTIONAL REQUIREMENTS
+- Must be stable, no placeholder pseudo-code.
+- Provide clear README with setup steps and environment variables.
+- Include database migrations and seed script.
+- Include sample seed data (countries for Central America, execution types, a couple brands/titles).
+- Ensure timezones and date parsing are consistent.
+
+DELIVERABLES
+1) Working app named “ROLA Pulse”
+2) Login screen + role-based access
+3) Executions CRUD + workflow + status history
+4) Dashboard with charts + global filters
+5) Import CSV + Export CSV
+6) Admin catalogs management screens
+
+IMPORTANT UX DETAILS
+- Global filter bar pinned at top for dashboard and executions page.
+- “Reset filters” button.
+- Filters should be multi-select and searchable.
+- Date range filter must be easy (last 7 days, last 30 days, month to date, custom).
+- Show currency and USD conversion clearly in the form.
+- When status changes, require evidence for “Evidence Uploaded” and “Closed/Reported” (at least one asset link or checklist completion).
+- Add inline validation errors.
+
+Build it end-to-end now. Output the full project structure and code.
