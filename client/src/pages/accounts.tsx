@@ -1,6 +1,17 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader as AlertDialogHeaderBlock,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -9,7 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Pencil, Building2 } from "lucide-react";
+import { Plus, Pencil, Building2, Loader2, Trash2 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useLanguage } from "@/lib/i18n";
 import { useToast } from "@/hooks/use-toast";
@@ -57,6 +68,31 @@ export default function AccountsPage() {
       setEditingAccount(null);
       setForm(emptyForm());
       toast({ title: editingAccount ? t("crm.accountUpdated") : t("crm.accountCreated") });
+    },
+    onError: (error: any) => {
+      toast({ title: t("executionForm.error"), description: error.message, variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      if (!editingAccount) {
+        throw new Error("No account selected");
+      }
+      const deletedId = editingAccount.id;
+      await apiRequest("DELETE", `/api/accounts/${deletedId}`);
+      return deletedId;
+    },
+    onSuccess: async (deletedId) => {
+      queryClient.setQueryData<CrmAccountWithSummary[]>(["/api/accounts"], (current) =>
+        current ? current.filter((account) => account.id !== deletedId) : current,
+      );
+      queryClient.removeQueries({ queryKey: ["/api/accounts", String(deletedId)] });
+      await queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
+      setDialogOpen(false);
+      setEditingAccount(null);
+      setForm(emptyForm());
+      toast({ title: t("crm.accountDeleted") });
     },
     onError: (error: any) => {
       toast({ title: t("executionForm.error"), description: error.message, variant: "destructive" });
@@ -115,14 +151,65 @@ export default function AccountsPage() {
                     data-testid="textarea-account-description"
                   />
                 </div>
-                <Button
-                  className="w-full"
-                  onClick={() => mutation.mutate(form)}
-                  disabled={!form.name.trim() || mutation.isPending}
-                  data-testid="button-save-account"
-                >
-                  {editingAccount ? t("crm.saveAccount") : t("crm.createAccount")}
-                </Button>
+                {editingAccount ? (
+                  <div className="flex gap-2">
+                    <Button
+                      className="flex-1"
+                      onClick={() => mutation.mutate(form)}
+                      disabled={!form.name.trim() || mutation.isPending || deleteMutation.isPending}
+                      data-testid="button-save-account"
+                    >
+                      {mutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                      {t("crm.saveAccount")}
+                    </Button>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          variant="destructive"
+                          disabled={mutation.isPending || deleteMutation.isPending}
+                          data-testid="button-delete-account-trigger"
+                        >
+                          <Trash2 className="w-4 h-4 mr-2" />
+                          {t("crm.deleteAccount")}
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeaderBlock>
+                          <AlertDialogTitle>{t("crm.deleteAccount")}</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            {t("crm.deleteAccountConfirm")} <strong>{editingAccount.name}</strong>?
+                          </AlertDialogDescription>
+                        </AlertDialogHeaderBlock>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel data-testid="button-cancel-delete-account">
+                            {t("executionForm.cancel")}
+                          </AlertDialogCancel>
+                          <AlertDialogAction asChild>
+                            <Button
+                              variant="destructive"
+                              onClick={() => deleteMutation.mutate()}
+                              disabled={deleteMutation.isPending}
+                              data-testid="button-confirm-delete-account"
+                            >
+                              {deleteMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                              {t("crm.deleteAccount")}
+                            </Button>
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </div>
+                ) : (
+                  <Button
+                    className="w-full"
+                    onClick={() => mutation.mutate(form)}
+                    disabled={!form.name.trim() || mutation.isPending}
+                    data-testid="button-save-account"
+                  >
+                    {mutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                    {t("crm.createAccount")}
+                  </Button>
+                )}
               </div>
             </DialogContent>
           </Dialog>

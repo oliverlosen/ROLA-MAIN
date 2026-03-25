@@ -12,7 +12,7 @@ import { format, subDays, startOfMonth } from "date-fns";
 import { useLanguage } from "@/lib/i18n";
 import type { Country, Brand, Title, Studio } from "@shared/schema";
 
-interface FilterState {
+export interface FilterState {
   dateFrom?: Date;
   dateTo?: Date;
   countries: number[];
@@ -32,32 +32,51 @@ interface FilterContextType {
 
 const FilterContext = createContext<FilterContextType | null>(null);
 
-const DEFAULT_FILTERS: FilterState = {
-  countries: [],
-  brands: [],
-  titles: [],
-  studios: [],
-  executionTypes: [],
-  statuses: [],
-};
+export function createFilterState(overrides: Partial<FilterState> = {}): FilterState {
+  return {
+    dateFrom: overrides.dateFrom,
+    dateTo: overrides.dateTo,
+    countries: overrides.countries ? [...overrides.countries] : [],
+    brands: overrides.brands ? [...overrides.brands] : [],
+    titles: overrides.titles ? [...overrides.titles] : [],
+    studios: overrides.studios ? [...overrides.studios] : [],
+    executionTypes: overrides.executionTypes ? [...overrides.executionTypes] : [],
+    statuses: overrides.statuses ? [...overrides.statuses] : [],
+  };
+}
+
+export const DEFAULT_FILTERS = createFilterState();
+
+export function buildFilterParams(filters: FilterState) {
+  const params = new URLSearchParams();
+  if (filters.dateFrom) params.set("dateFrom", format(filters.dateFrom, "yyyy-MM-dd"));
+  if (filters.dateTo) params.set("dateTo", format(filters.dateTo, "yyyy-MM-dd"));
+  if (filters.countries.length) params.set("countries", filters.countries.join(","));
+  if (filters.brands.length) params.set("brands", filters.brands.join(","));
+  if (filters.titles.length) params.set("titles", filters.titles.join(","));
+  if (filters.studios.length) params.set("studios", filters.studios.join(","));
+  if (filters.executionTypes.length) params.set("executionTypes", filters.executionTypes.join(","));
+  if (filters.statuses.length) params.set("statuses", filters.statuses.join(","));
+  return params.toString() ? `?${params.toString()}` : "";
+}
+
+export function countActiveFilters(filters: FilterState) {
+  return [
+    filters.dateFrom || filters.dateTo ? 1 : 0,
+    filters.countries.length ? 1 : 0,
+    filters.brands.length ? 1 : 0,
+    filters.titles.length ? 1 : 0,
+    filters.studios.length ? 1 : 0,
+    filters.executionTypes.length ? 1 : 0,
+    filters.statuses.length ? 1 : 0,
+  ].reduce((a, b) => a + b, 0);
+}
 
 export function FilterProvider({ children }: { children: React.ReactNode }) {
-  const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
+  const [filters, setFilters] = useState<FilterState>(() => createFilterState());
 
-  const filterParams = useMemo(() => {
-    const params = new URLSearchParams();
-    if (filters.dateFrom) params.set("dateFrom", format(filters.dateFrom, "yyyy-MM-dd"));
-    if (filters.dateTo) params.set("dateTo", format(filters.dateTo, "yyyy-MM-dd"));
-    if (filters.countries.length) params.set("countries", filters.countries.join(","));
-    if (filters.brands.length) params.set("brands", filters.brands.join(","));
-    if (filters.titles.length) params.set("titles", filters.titles.join(","));
-    if (filters.studios.length) params.set("studios", filters.studios.join(","));
-    if (filters.executionTypes.length) params.set("executionTypes", filters.executionTypes.join(","));
-    if (filters.statuses.length) params.set("statuses", filters.statuses.join(","));
-    return params.toString() ? `?${params.toString()}` : "";
-  }, [filters]);
-
-  const resetFilters = useCallback(() => setFilters(DEFAULT_FILTERS), []);
+  const filterParams = useMemo(() => buildFilterParams(filters), [filters]);
+  const resetFilters = useCallback(() => setFilters(createFilterState()), []);
 
   return (
     <FilterContext.Provider value={{ filters, setFilters, filterParams, resetFilters }}>
@@ -74,6 +93,24 @@ export function useFilters() {
 
 export function GlobalFilters() {
   const { filters, setFilters, resetFilters } = useFilters();
+  return (
+    <ExecutionFiltersBar
+      filters={filters}
+      onChange={setFilters}
+      onReset={resetFilters}
+    />
+  );
+}
+
+export function ExecutionFiltersBar({
+  filters,
+  onChange,
+  onReset,
+}: {
+  filters: FilterState;
+  onChange: (filters: FilterState) => void;
+  onReset: () => void;
+}) {
   const { t } = useLanguage();
   const { data: countriesList } = useQuery<Country[]>({ queryKey: ["/api/countries"] });
   const { data: brandsList } = useQuery<Brand[]>({ queryKey: ["/api/brands"] });
@@ -101,15 +138,7 @@ export function GlobalFilters() {
     { label: t("filters.monthToDate"), fn: () => ({ from: startOfMonth(new Date()), to: new Date() }) },
   ];
 
-  const activeCount = [
-    filters.dateFrom || filters.dateTo ? 1 : 0,
-    filters.countries.length ? 1 : 0,
-    filters.brands.length ? 1 : 0,
-    filters.titles.length ? 1 : 0,
-    filters.studios.length ? 1 : 0,
-    filters.executionTypes.length ? 1 : 0,
-    filters.statuses.length ? 1 : 0,
-  ].reduce((a, b) => a + b, 0);
+  const activeCount = countActiveFilters(filters);
 
   return (
     <div className="flex items-center gap-2 flex-wrap" data-testid="global-filters">
@@ -118,66 +147,75 @@ export function GlobalFilters() {
       <DateRangeFilter
         dateFrom={filters.dateFrom}
         dateTo={filters.dateTo}
-        onChange={(from, to) => setFilters({ ...filters, dateFrom: from, dateTo: to })}
+        onChange={(from, to) => onChange({ ...filters, dateFrom: from, dateTo: to })}
         datePresets={datePresets}
       />
 
       <MultiSelectFilter
         label={t("filters.country")}
-        options={(countriesList || []).map(c => ({ value: c.id, label: c.name }))}
+        options={(countriesList || []).map((country) => ({ value: country.id, label: country.name }))}
         selected={filters.countries}
-        onChange={v => setFilters({ ...filters, countries: v })}
+        onChange={(value) => onChange({ ...filters, countries: value })}
       />
 
       <MultiSelectFilter
         label={t("filters.brand")}
-        options={(brandsList || []).map(b => ({ value: b.id, label: b.name }))}
+        options={(brandsList || []).map((brand) => ({ value: brand.id, label: brand.name }))}
         selected={filters.brands}
-        onChange={v => setFilters({ ...filters, brands: v })}
+        onChange={(value) => onChange({ ...filters, brands: value })}
       />
 
       <MultiSelectFilter
         label={t("filters.title")}
-        options={(titlesList || []).map(t => ({ value: t.id, label: t.name }))}
+        options={(titlesList || []).map((title) => ({ value: title.id, label: title.name }))}
         selected={filters.titles}
-        onChange={v => setFilters({ ...filters, titles: v })}
+        onChange={(value) => onChange({ ...filters, titles: value })}
       />
 
       <MultiSelectFilter
         label={t("filters.studio")}
-        options={(studiosList || []).map(s => ({ value: s.id, label: s.name }))}
+        options={(studiosList || []).map((studio) => ({ value: studio.id, label: studio.name }))}
         selected={filters.studios}
-        onChange={v => setFilters({ ...filters, studios: v })}
+        onChange={(value) => onChange({ ...filters, studios: value })}
       />
 
       <MultiSelectFilter
         label={t("filters.type")}
-        options={typeOptions.map(tp => ({ value: tp.value as any, label: tp.label }))}
-        selected={filters.executionTypes as any}
-        onChange={v => setFilters({ ...filters, executionTypes: v as any })}
-        isString
+        options={typeOptions}
+        selected={filters.executionTypes}
+        onChange={(value) => onChange({ ...filters, executionTypes: value })}
       />
 
       <MultiSelectFilter
         label={t("filters.status")}
-        options={statusOptions.map(s => ({ value: s.value as any, label: s.label }))}
-        selected={filters.statuses as any}
-        onChange={v => setFilters({ ...filters, statuses: v as any })}
-        isString
+        options={statusOptions}
+        selected={filters.statuses}
+        onChange={(value) => onChange({ ...filters, statuses: value })}
       />
 
-      {activeCount > 0 && (
-        <Button variant="ghost" size="sm" onClick={resetFilters} data-testid="button-reset-filters">
+      {activeCount > 0 ? (
+        <Button variant="ghost" size="sm" onClick={onReset} data-testid="button-reset-filters">
           <RotateCcw className="w-3 h-3 mr-1" />
           {t("filters.reset")} ({activeCount})
         </Button>
-      )}
+      ) : null}
     </div>
   );
 }
 
-function DateRangeFilter({ dateFrom, dateTo, onChange, datePresets }: { dateFrom?: Date; dateTo?: Date; onChange: (from?: Date, to?: Date) => void; datePresets: { label: string; fn: () => { from: Date; to: Date } }[] }) {
+function DateRangeFilter({
+  dateFrom,
+  dateTo,
+  onChange,
+  datePresets,
+}: {
+  dateFrom?: Date;
+  dateTo?: Date;
+  onChange: (from?: Date, to?: Date) => void;
+  datePresets: { label: string; fn: () => { from: Date; to: Date } }[];
+}) {
   const { t } = useLanguage();
+
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -186,16 +224,24 @@ function DateRangeFilter({ dateFrom, dateTo, onChange, datePresets }: { dateFrom
           {dateFrom && dateTo
             ? `${format(dateFrom, "MMM d")} - ${format(dateTo, "MMM d")}`
             : t("filters.dateRange")}
-          {(dateFrom || dateTo) && (
-            <X className="w-3 h-3 ml-1" onClick={(e) => { e.stopPropagation(); onChange(undefined, undefined); }} />
-          )}
+          {(dateFrom || dateTo) ? (
+            <X className="w-3 h-3 ml-1" onClick={(event) => { event.stopPropagation(); onChange(undefined, undefined); }} />
+          ) : null}
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-auto p-3" align="start">
         <div className="flex gap-1 mb-3 flex-wrap">
-          {datePresets.map(p => (
-            <Button key={p.label} variant="ghost" size="sm" onClick={() => { const r = p.fn(); onChange(r.from, r.to); }}>
-              {p.label}
+          {datePresets.map((preset) => (
+            <Button
+              key={preset.label}
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                const range = preset.fn();
+                onChange(range.from, range.to);
+              }}
+            >
+              {preset.label}
             </Button>
           ))}
         </div>
@@ -215,20 +261,18 @@ function MultiSelectFilter<T extends number | string>({
   options,
   selected,
   onChange,
-  isString,
 }: {
   label: string;
   options: { value: T; label: string }[];
   selected: T[];
-  onChange: (v: T[]) => void;
-  isString?: boolean;
+  onChange: (value: T[]) => void;
 }) {
   const { t } = useLanguage();
   const [search, setSearch] = useState("");
-  const filtered = options.filter(o => o.label.toLowerCase().includes(search.toLowerCase()));
+  const filtered = options.filter((option) => option.label.toLowerCase().includes(search.toLowerCase()));
 
-  const toggle = (v: T) => {
-    onChange(selected.includes(v) ? selected.filter(s => s !== v) : [...selected, v]);
+  const toggle = (value: T) => {
+    onChange(selected.includes(value) ? selected.filter((item) => item !== value) : [...selected, value]);
   };
 
   return (
@@ -236,40 +280,34 @@ function MultiSelectFilter<T extends number | string>({
       <PopoverTrigger asChild>
         <Button variant="outline" size="sm" data-testid={`button-filter-${label.toLowerCase()}`}>
           {label}
-          {selected.length > 0 && (
+          {selected.length > 0 ? (
             <Badge variant="secondary" className="ml-1 text-xs">{selected.length}</Badge>
-          )}
+          ) : null}
           <ChevronDown className="w-3 h-3 ml-1" />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-56 p-2" align="start">
-        {options.length > 5 && (
+        {options.length > 5 ? (
           <Input
             placeholder={`${t("filters.search")} ${label.toLowerCase()}...`}
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={(event) => setSearch(event.target.value)}
             className="mb-2"
           />
-        )}
+        ) : null}
         <ScrollArea className="max-h-48">
           <div className="space-y-1">
-            {filtered.map(o => (
-              <label key={String(o.value)} className="flex items-center gap-2 px-2 py-1 rounded-md hover-elevate cursor-pointer text-sm">
+            {filtered.map((option) => (
+              <label key={String(option.value)} className="flex items-center gap-2 px-2 py-1 rounded-md hover-elevate cursor-pointer text-sm">
                 <Checkbox
-                  checked={selected.includes(o.value)}
-                  onCheckedChange={() => toggle(o.value)}
+                  checked={selected.includes(option.value)}
+                  onCheckedChange={() => toggle(option.value)}
                 />
-                <span className="truncate">{o.label}</span>
+                <span>{option.label}</span>
               </label>
             ))}
-            {filtered.length === 0 && <p className="text-xs text-muted-foreground text-center py-2">{t("filters.noResults")}</p>}
           </div>
         </ScrollArea>
-        {selected.length > 0 && (
-          <Button variant="ghost" size="sm" className="w-full mt-1" onClick={() => onChange([])}>
-            {t("filters.clear")}
-          </Button>
-        )}
       </PopoverContent>
     </Popover>
   );

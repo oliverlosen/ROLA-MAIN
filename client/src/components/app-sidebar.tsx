@@ -1,4 +1,4 @@
-import { LayoutDashboard, FileSpreadsheet, LogOut, ChevronDown, Users, Globe, Tag, Film, Building2, Bell, MessageSquare, Mail, BriefcaseBusiness } from "lucide-react";
+import { LayoutDashboard, FileSpreadsheet, LogOut, ChevronDown, Users, Globe, Tag, Film, Building2, Bell, MessageSquare, Mail, BriefcaseBusiness, CalendarRange } from "lucide-react";
 import rolaLogo from "@assets/download-1_1770410154902.jpg";
 import { useLocation, Link } from "wouter";
 import { useAuth } from "@/lib/auth";
@@ -28,6 +28,7 @@ import {
 const mainNav = [
   { key: "sidebar.dashboard", url: "/", icon: LayoutDashboard, testId: "dashboard" },
   { key: "sidebar.executions", url: "/executions", icon: FileSpreadsheet, testId: "executions" },
+  { key: "sidebar.gantt", url: "/gantt", icon: CalendarRange, testId: "gantt" },
   { key: "sidebar.accounts", url: "/accounts", icon: BriefcaseBusiness, testId: "accounts" },
 ];
 

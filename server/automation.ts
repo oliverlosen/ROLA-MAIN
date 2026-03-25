@@ -17,6 +17,8 @@ import {
   type CampaignWithDetails,
   type CrmCampaign,
   type ExecutionGanttItem,
+  type ExecutionPortfolioGanttItem,
+  type ExecutionPortfolioGanttResponse,
   type ExecutionWithDetails,
   type GanttTaskBar,
   type OperationalRiskSummary,
@@ -141,6 +143,13 @@ function isTaskActionable(task: Task | TaskWithAssignee): boolean {
 
 function isExecutionOpen(execution: ExecutionWithDetails): boolean {
   return execution.status !== "closed";
+}
+
+function compareNullableDatesAsc(a: string | null | undefined, b: string | null | undefined): number {
+  if (a && b) return a.localeCompare(b);
+  if (a) return -1;
+  if (b) return 1;
+  return 0;
 }
 
 function buildExecutionName(execution: ExecutionWithDetails | null | undefined): string {
@@ -612,6 +621,116 @@ class AutomationService {
     const execution = await storage.getExecution(executionId);
     if (!execution) return undefined;
     return buildExecutionGanttInternal(execution);
+  }
+
+  async getExecutionPortfolioGantt(filters: any): Promise<ExecutionPortfolioGanttResponse> {
+    const { executions: executionRows } = await storage.getExecutions({
+      ...filters,
+      page: 1,
+      limit: 100000,
+    });
+
+    if (!executionRows.length) {
+      return {
+        summary: {
+          executionCount: 0,
+          openExecutionCount: 0,
+          avgProgress: 0,
+          atRiskCount: 0,
+          openAlertCount: 0,
+          rangeStart: null,
+          rangeEnd: null,
+        },
+        executions: [],
+      };
+    }
+
+    const executionIds = executionRows.map((execution) => execution.id);
+    const [taskRows, openAlertRows] = await Promise.all([
+      db.select().from(tasks).where(inArray(tasks.executionId, executionIds)),
+      db.select().from(automationAlerts).where(and(inArray(automationAlerts.executionId, executionIds), eq(automationAlerts.status, "open"))),
+    ]);
+
+    const tasksByExecution = new Map<number, Task[]>();
+    for (const task of taskRows) {
+      const current = tasksByExecution.get(task.executionId) || [];
+      current.push(task);
+      tasksByExecution.set(task.executionId, current);
+    }
+
+    const alertsByExecution = new Map<number, AutomationAlert[]>();
+    for (const alert of openAlertRows) {
+      if (!alert.executionId) continue;
+      const current = alertsByExecution.get(alert.executionId) || [];
+      current.push(alert);
+      alertsByExecution.set(alert.executionId, current);
+    }
+
+    const items: ExecutionPortfolioGanttItem[] = executionRows.map((execution) => {
+      const executionTasks = tasksByExecution.get(execution.id) || [];
+      const taskBars = executionTasks.map((task) => {
+        const range = buildTaskRange(task, execution);
+        const progressInfo = getTaskProgress(task);
+        return {
+          ...task,
+          rangeStart: range.start,
+          rangeEnd: range.end,
+          progress: progressInfo.progress,
+        };
+      });
+
+      const activeTasks = taskBars.filter((task) => task.status !== "cancelled");
+      const completedTaskCount = activeTasks.filter((task) => task.status === "completed").length;
+      const derivedProgress = activeTasks.length
+        ? clampProgress(activeTasks.reduce((sum, task) => sum + task.progress, 0) / activeTasks.length)
+        : getExecutionFallbackProgress(execution.status);
+      const progress = typeof execution.progressOverride === "number"
+        ? clampProgress(execution.progressOverride)
+        : derivedProgress;
+
+      let rangeStart = execution.plannedStartDate || null;
+      let rangeEnd = execution.plannedEndDate || execution.dueDate || null;
+      if (!rangeStart || !rangeEnd) {
+        rangeStart = rangeStart || pickMinDate(taskBars.map((task) => task.rangeStart)) || execution.executionDate || null;
+        rangeEnd = rangeEnd || pickMaxDate(taskBars.map((task) => task.rangeEnd)) || execution.dueDate || execution.executionDate || rangeStart;
+      }
+
+      const normalizedRange = normalizeRange(rangeStart, rangeEnd);
+      const executionAlerts = alertsByExecution.get(execution.id) || [];
+
+      return {
+        ...execution,
+        rangeStart: normalizedRange.start,
+        rangeEnd: normalizedRange.end,
+        progress,
+        openAlertCount: executionAlerts.length,
+        atRisk: executionAlerts.some((alert) => alert.severity === "high"),
+        activeTaskCount: activeTasks.length,
+        completedTaskCount,
+        accountName: execution.account?.name || null,
+        campaignName: execution.campaign?.name || null,
+      };
+    });
+
+    items.sort((a, b) =>
+      compareNullableDatesAsc(a.rangeStart, b.rangeStart)
+      || compareNullableDatesAsc(a.rangeEnd, b.rangeEnd)
+      || a.id - b.id);
+
+    const summary = {
+      executionCount: items.length,
+      openExecutionCount: items.filter((execution) => isExecutionOpen(execution)).length,
+      avgProgress: items.length ? clampProgress(items.reduce((sum, execution) => sum + execution.progress, 0) / items.length) : 0,
+      atRiskCount: items.filter((execution) => execution.atRisk).length,
+      openAlertCount: items.reduce((sum, execution) => sum + execution.openAlertCount, 0),
+      rangeStart: pickMinDate(items.map((execution) => execution.rangeStart)),
+      rangeEnd: pickMaxDate(items.map((execution) => execution.rangeEnd)),
+    };
+
+    return {
+      summary,
+      executions: items,
+    };
   }
 
   async getCampaignDetails(campaignId: number): Promise<CampaignWithDetails | undefined> {

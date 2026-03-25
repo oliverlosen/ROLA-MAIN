@@ -1,5 +1,5 @@
 import { eq, and, desc, asc, sql, gte, lte, inArray, count, isNull, ne, gt } from "drizzle-orm";
-import { db } from "./db";
+import { db, sqlite } from "./db";
 import {
   users, countries, brands, titles, studios, crmAccounts, crmContacts, crmCampaigns,
   executions, assets, statusHistory, fxDefaults,
@@ -52,6 +52,7 @@ export interface IStorage {
   getAccount(id: number): Promise<AccountWithDetails | undefined>;
   createAccount(account: InsertCrmAccount): Promise<CrmAccount>;
   updateAccount(id: number, account: Partial<InsertCrmAccount>): Promise<CrmAccount | undefined>;
+  deleteAccount(id: number): Promise<void>;
   getContactsByAccount(accountId: number): Promise<CrmContact[]>;
   createContact(contact: InsertCrmContact): Promise<CrmContact>;
   updateContact(id: number, contact: Partial<InsertCrmContact>): Promise<CrmContact | undefined>;
@@ -360,6 +361,38 @@ export class DatabaseStorage implements IStorage {
       .where(eq(crmAccounts.id, id))
       .returning();
     return updated;
+  }
+
+  async deleteAccount(id: number): Promise<void> {
+    const runDelete = sqlite.transaction((accountId: number) => {
+      const now = Date.now();
+
+      sqlite.prepare(`
+        UPDATE executions
+        SET primary_contact_id = NULL, updated_at = ?
+        WHERE primary_contact_id IN (
+          SELECT id FROM crm_contacts WHERE account_id = ?
+        )
+      `).run(now, accountId);
+
+      sqlite.prepare(`
+        UPDATE executions
+        SET campaign_id = NULL, updated_at = ?
+        WHERE campaign_id IN (
+          SELECT id FROM crm_campaigns WHERE account_id = ?
+        )
+      `).run(now, accountId);
+
+      sqlite.prepare(`
+        UPDATE executions
+        SET account_id = NULL, campaign_id = NULL, primary_contact_id = NULL, updated_at = ?
+        WHERE account_id = ?
+      `).run(now, accountId);
+
+      sqlite.prepare("DELETE FROM crm_accounts WHERE id = ?").run(accountId);
+    });
+
+    runDelete(id);
   }
 
   async createContact(contact: InsertCrmContact): Promise<CrmContact> {

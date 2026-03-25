@@ -243,6 +243,18 @@ export async function registerRoutes(
     }
   });
 
+  app.delete("/api/accounts/:id", requireRole("admin", "editor"), async (req, res) => {
+    try {
+      const accountId = Number(req.params.id);
+      const existing = await storage.getAccount(accountId);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      await storage.deleteAccount(accountId);
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
   app.get("/api/accounts/:id/contacts", requireAuth, async (req, res) => {
     res.json(await storage.getContactsByAccount(Number(req.params.id)));
   });
@@ -353,6 +365,11 @@ export async function registerRoutes(
     res.setHeader("Content-Type", "text/csv");
     res.setHeader("Content-Disposition", "attachment; filename=executions.csv");
     res.send(csv);
+  });
+
+  app.get("/api/executions/gantt", requireAuth, async (req, res) => {
+    const filters = parseFilters(req.query);
+    res.json(await automationService.getExecutionPortfolioGantt(filters));
   });
 
   app.get("/api/executions/:id", requireAuth, async (req, res) => {

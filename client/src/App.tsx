@@ -27,6 +27,7 @@ import EmailPage from "@/pages/email";
 import AccountsPage from "@/pages/accounts";
 import AccountDetailPage from "@/pages/account-detail";
 import CampaignDetailPage from "@/pages/campaign-detail";
+import GanttPage from "@/pages/gantt";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -54,6 +55,7 @@ function Router() {
       <Route path="/accounts" component={AccountsPage} />
       <Route path="/accounts/:id" component={AccountDetailPage} />
       <Route path="/campaigns/:id" component={CampaignDetailPage} />
+      <Route path="/gantt" component={GanttPage} />
       <Route path="/email" component={EmailPage} />
       <Route path="/chat/:conversationId" component={ChatPage} />
       <Route path="/chat" component={ChatPage} />
@@ -92,7 +94,7 @@ function AuthenticatedApp() {
         <div className="flex h-screen w-full">
           <AppSidebar />
           <div className="flex flex-col flex-1 min-w-0">
-            <header className="flex items-center justify-between gap-2 p-2 border-b sticky top-0 z-50 bg-[#bababb]">
+            <header className="flex items-center justify-between gap-2 p-2 border-b sticky top-0 z-50 bg-gradient-to-b from-[#f7f8fa] via-[#e9edf2] to-[#d6dbe3]">
               <div className="flex items-center gap-2">
                 <SidebarTrigger data-testid="button-sidebar-toggle" />
                 <img src={rolaLogo} alt="Rola Logo" className="w-7 h-7 rounded-md object-cover" data-testid="img-header-logo" />

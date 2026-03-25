@@ -564,6 +564,33 @@ export type CampaignGanttItem = {
   alerts: AutomationAlertWithContext[];
 };
 
+export type ExecutionPortfolioGanttItem = ExecutionWithDetails & {
+  rangeStart: string | null;
+  rangeEnd: string | null;
+  progress: number;
+  openAlertCount: number;
+  atRisk: boolean;
+  activeTaskCount: number;
+  completedTaskCount: number;
+  accountName?: string | null;
+  campaignName?: string | null;
+};
+
+export type ExecutionPortfolioGanttSummary = {
+  executionCount: number;
+  openExecutionCount: number;
+  avgProgress: number;
+  atRiskCount: number;
+  openAlertCount: number;
+  rangeStart: string | null;
+  rangeEnd: string | null;
+};
+
+export type ExecutionPortfolioGanttResponse = {
+  summary: ExecutionPortfolioGanttSummary;
+  executions: ExecutionPortfolioGanttItem[];
+};
+
 export type OperationalRiskSummary = {
   openAlertCount: number;
   highSeverityCount: number;
