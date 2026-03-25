@@ -80,15 +80,14 @@ export default function AccountsPage() {
         throw new Error("No account selected");
       }
       const deletedId = editingAccount.id;
-      await apiRequest("DELETE", `/api/accounts/${deletedId}`);
+      await apiRequest("POST", `/api/accounts/${deletedId}/delete`);
       return deletedId;
     },
-    onSuccess: async (deletedId) => {
+    onSuccess: (deletedId) => {
       queryClient.setQueryData<CrmAccountWithSummary[]>(["/api/accounts"], (current) =>
         current ? current.filter((account) => account.id !== deletedId) : current,
       );
       queryClient.removeQueries({ queryKey: ["/api/accounts", String(deletedId)] });
-      await queryClient.invalidateQueries({ queryKey: ["/api/accounts"] });
       setDialogOpen(false);
       setEditingAccount(null);
       setForm(emptyForm());

@@ -29,7 +29,13 @@ export async function setupVite(server: Server, app: Express) {
     appType: "custom",
   });
 
-  app.use(vite.middlewares);
+  app.use((req, res, next) => {
+    if (req.path.startsWith("/api")) {
+      return next();
+    }
+
+    return vite.middlewares(req, res, next);
+  });
 
   app.use("/{*path}", async (req, res, next) => {
     if (req.path.startsWith("/api")) {

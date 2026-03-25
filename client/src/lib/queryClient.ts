@@ -27,6 +27,10 @@ function createApiError(message: string, options: ApiErrorDetails) {
   return new ApiError(message, options);
 }
 
+function getResponseContentType(res: Response) {
+  return res.headers.get("content-type")?.toLowerCase() || "";
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
@@ -136,6 +140,20 @@ export async function apiRequest(
   }
 
   await throwIfResNotOk(res);
+
+  const contentType = getResponseContentType(res);
+  if (contentType.includes("text/html")) {
+    const rawBody = (await res.text()).trim();
+    throw createApiError(
+      "La API devolvió HTML en lugar de JSON. Inicia la app con `npm run dev` para levantar Express + frontend juntos.",
+      {
+        status: res.status,
+        code: "API_RETURNED_HTML",
+        rawBody,
+      },
+    );
+  }
+
   return res;
 }
 

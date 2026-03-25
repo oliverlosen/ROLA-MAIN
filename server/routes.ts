@@ -71,6 +71,18 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  const handleDeleteAccount = async (req: Request, res: Response) => {
+    try {
+      const accountId = Number(req.params.id);
+      const existing = await storage.getAccount(accountId);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      await storage.deleteAccount(accountId);
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(400).json({ message: err.message });
+    }
+  };
+
   app.use(
     session({
       store: new MemoryStore({ checkPeriod: 24 * 60 * 60 * 1000 }),
@@ -244,15 +256,11 @@ export async function registerRoutes(
   });
 
   app.delete("/api/accounts/:id", requireRole("admin", "editor"), async (req, res) => {
-    try {
-      const accountId = Number(req.params.id);
-      const existing = await storage.getAccount(accountId);
-      if (!existing) return res.status(404).json({ message: "Not found" });
-      await storage.deleteAccount(accountId);
-      res.json({ ok: true });
-    } catch (err: any) {
-      res.status(400).json({ message: err.message });
-    }
+    await handleDeleteAccount(req, res);
+  });
+
+  app.post("/api/accounts/:id/delete", requireRole("admin", "editor"), async (req, res) => {
+    await handleDeleteAccount(req, res);
   });
 
   app.get("/api/accounts/:id/contacts", requireAuth, async (req, res) => {

@@ -94,7 +94,7 @@ function AuthenticatedApp() {
         <div className="flex h-screen w-full">
           <AppSidebar />
           <div className="flex flex-col flex-1 min-w-0">
-            <header className="flex items-center justify-between gap-2 p-2 border-b sticky top-0 z-50 bg-gradient-to-b from-[#f7f8fa] via-[#e9edf2] to-[#d6dbe3]">
+            <header className="flex items-center justify-between gap-2 p-2 border-b sticky top-0 z-50 bg-gradient-to-b from-[#f7f8fa] via-[#e9edf2] to-[#d6dbe3] dark:from-[#3a3a3c] dark:via-[#2c2c2e] dark:to-[#1c1c1e]">
               <div className="flex items-center gap-2">
                 <SidebarTrigger data-testid="button-sidebar-toggle" />
                 <img src={rolaLogo} alt="Rola Logo" className="w-7 h-7 rounded-md object-cover" data-testid="img-header-logo" />
