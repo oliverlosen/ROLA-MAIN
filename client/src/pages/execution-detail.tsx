@@ -9,15 +9,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft, Pencil, Check, X, Plus, Link as LinkIcon, FileText, Clock, MessageSquare, ChevronDown, ChevronUp } from "lucide-react";
+import { ArrowLeft, Pencil, Check, X, Plus, Link as LinkIcon, FileText, Clock, MessageSquare, ChevronDown, ChevronUp, Mail } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useLanguage } from "@/lib/i18n";
 import { useToast } from "@/hooks/use-toast";
 import { CURRENCY_SYMBOLS } from "@shared/schema";
-import type { ExecutionWithDetails, Asset, StatusHistoryEntry, TaskWithAssignee, User } from "@shared/schema";
+import type { ExecutionWithDetails, Asset, StatusHistoryEntry, TaskWithAssignee, User, EmailThreadWithDetails } from "@shared/schema";
 import { format } from "date-fns";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 const STATUS_ORDER = ["draft", "in_review", "approved", "executed", "evidence_uploaded", "closed"];
 
@@ -92,6 +92,10 @@ export default function ExecutionDetailPage() {
 
   const { data: allUsers } = useQuery<User[]>({
     queryKey: ["/api/users"],
+  });
+
+  const { data: emailThreads } = useQuery<EmailThreadWithDetails[]>({
+    queryKey: [`/api/email/threads?executionId=${id}`],
   });
 
   const statusMutation = useMutation({
@@ -184,6 +188,20 @@ export default function ExecutionDetailPage() {
   const canEdit = user?.role === "admin" || user?.role === "editor";
   const canApprove = user?.role === "admin" || user?.role === "approver";
 
+  const taskEmailSummary = useMemo(() => {
+    const summary = new Map<number, { count: number; pending: boolean }>();
+    for (const thread of emailThreads || []) {
+      for (const link of thread.links || []) {
+        if (!link.task?.id) continue;
+        const current = summary.get(link.task.id) || { count: 0, pending: false };
+        current.count += 1;
+        current.pending = current.pending || Boolean(thread.pendingResponse);
+        summary.set(link.task.id, current);
+      }
+    }
+    return summary;
+  }, [emailThreads]);
+
   if (isLoading) return <div className="p-6"><Skeleton className="h-96 w-full" /></div>;
   if (!exec) return <div className="p-6 text-center text-muted-foreground">{t("executionDetail.executionNotFound")}</div>;
 
@@ -226,6 +244,15 @@ export default function ExecutionDetailPage() {
           >
             <MessageSquare className="w-4 h-4 mr-1" />
             Chat
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="button-go-email"
+            onClick={() => navigate(`/email?compose=1&executionId=${id}`)}
+          >
+            <Mail className="w-4 h-4 mr-1" />
+            {t("email.compose")}
           </Button>
           {canEdit && (
             <Link href={`/executions/${id}/edit`}>
@@ -386,6 +413,48 @@ export default function ExecutionDetailPage() {
           </Card>
 
           <Card>
+            <CardHeader className="flex flex-row items-center justify-between gap-2 pb-3">
+              <h2 className="text-sm font-semibold flex items-center gap-2">
+                <Mail className="w-4 h-4" />
+                {t("email.title")} ({emailThreads?.length || 0})
+              </h2>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => navigate(`/email?compose=1&executionId=${id}`)}
+                data-testid="button-send-email-from-execution"
+              >
+                <Plus className="w-4 h-4 mr-1" />
+                {t("email.compose")}
+              </Button>
+            </CardHeader>
+            <CardContent>
+              {emailThreads && emailThreads.length > 0 ? (
+                <div className="space-y-2">
+                  {emailThreads.slice(0, 5).map((thread) => (
+                    <button
+                      key={thread.id}
+                      className="w-full text-left rounded-md bg-muted p-3 hover:bg-muted/80 transition-colors"
+                      onClick={() => navigate(`/email?threadId=${thread.id}`)}
+                      data-testid={`execution-email-thread-${thread.id}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-medium text-sm truncate">{thread.subject || t("email.noSubject")}</p>
+                        {thread.pendingResponse && <Badge className="text-xs">{t("email.pendingReply")}</Badge>}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1 truncate">
+                        {thread.latestMessage?.bodyText || thread.snippet || t("email.noPreview")}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground text-center py-3">{t("email.noThreads")}</p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
             <CardHeader className="pb-3">
               <h2 className="text-sm font-semibold flex items-center gap-2">
                 <Clock className="w-4 h-4" />
@@ -485,9 +554,27 @@ export default function ExecutionDetailPage() {
                           <div className="flex items-center gap-2 flex-wrap text-xs text-muted-foreground mt-0.5">
                             <span>{task.assignee?.displayName || t("tasks.unassigned")}</span>
                             {task.dueDate && <span>· {format(new Date(task.dueDate), "MMM d")}</span>}
+                            {taskEmailSummary.get(task.id)?.count ? <span>· {taskEmailSummary.get(task.id)?.count} {t("email.title").toLowerCase()}</span> : null}
                           </div>
                         </div>
                         <div className="shrink-0 flex items-center gap-1">
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-6 w-6"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              navigate(`/email?compose=1&executionId=${id}&taskId=${task.id}`);
+                            }}
+                            data-testid={`button-email-task-${task.id}`}
+                          >
+                            <Mail className="w-3.5 h-3.5" />
+                          </Button>
+                          {taskEmailSummary.get(task.id)?.pending ? (
+                            <Badge variant="outline" className="text-[10px]">
+                              {t("email.pendingReply")}
+                            </Badge>
+                          ) : null}
                           {editingStatusTaskId === task.id ? (
                             <Select
                               value={task.status}

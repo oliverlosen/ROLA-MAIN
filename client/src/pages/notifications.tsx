@@ -45,6 +45,12 @@ function buildNotificationText(
       return `${actorName} ${t("notifications.mentionedYou")} ${convName}`;
     }
 
+    case "email_reply": {
+      const senderName = payload?.senderName || "External sender";
+      const subject = payload?.subject || "";
+      return `${senderName} ${t("notifications.repliedToEmail")} "${subject}"`;
+    }
+
     default:
       return `${actorName} — ${notification.type}`;
   }
@@ -87,6 +93,11 @@ export default function NotificationsPage() {
 
     if (notification.type === "mention" && payload?.conversationId) {
       navigate(`/chat/${payload.conversationId}`);
+      return;
+    }
+
+    if (notification.type === "email_reply" && payload?.threadId) {
+      navigate(`/email?threadId=${payload.threadId}`);
       return;
     }
 

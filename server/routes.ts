@@ -6,6 +6,8 @@ import passport from "passport";
 import { Strategy as LocalStrategy } from "passport-local";
 import bcrypt from "bcryptjs";
 import { storage } from "./storage";
+import { emailService } from "./email";
+import { emailProviderValues } from "@shared/schema";
 
 const MemoryStore = createMemoryStore(session);
 
@@ -38,6 +40,30 @@ function parseFilters(query: any) {
     sortBy: query.sortBy || "execution_date",
     sortDir: query.sortDir || "desc",
   };
+}
+
+function getBaseUrl(req: Request) {
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const protocol = typeof forwardedProto === "string" ? forwardedProto.split(",")[0] : req.protocol;
+  return `${protocol}://${req.get("host")}`;
+}
+
+function parseEmailProvider(provider: string | string[]) {
+  const value = Array.isArray(provider) ? provider[0] : provider;
+  if (emailProviderValues.includes(value as any)) {
+    return value as (typeof emailProviderValues)[number];
+  }
+  throw new Error("Unsupported email provider");
+}
+
+function sendApiError(
+  res: Response,
+  status: number,
+  code: string,
+  message: string,
+  details?: Record<string, unknown>,
+) {
+  return res.status(status).json({ code, message, details });
 }
 
 export async function registerRoutes(
@@ -533,6 +559,163 @@ export async function registerRoutes(
     await storage.updateLastRead(convId, user.id);
     const [enriched] = await storage.getMessages(convId, 1);
     res.json(enriched || msg);
+  });
+
+  // === EMAIL ===
+  app.get("/api/email/providers/status", requireAuth, async (req, res) => {
+    res.json({
+      providers: emailService.getProviderStatuses(getBaseUrl(req)),
+    });
+  });
+
+  app.post("/api/email/accounts/:provider/connect", requireAuth, async (req, res) => {
+    try {
+      const provider = parseEmailProvider(req.params.provider);
+      const providerStatus = emailService.getProviderStatus(provider, getBaseUrl(req));
+      if (!providerStatus.enabled) {
+        return sendApiError(
+          res,
+          503,
+          "EMAIL_PROVIDER_NOT_CONFIGURED",
+          providerStatus.message,
+          {
+            provider,
+            reason: providerStatus.reason,
+            callbackUrl: providerStatus.callbackUrl,
+            missingEnv: providerStatus.missingEnv,
+          },
+        );
+      }
+
+      const state = `${provider}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+      (req.session as any).emailOAuthState = state;
+      (req.session as any).emailOAuthProvider = provider;
+      const authUrl = emailService.getAuthorizationUrl(provider, state, getBaseUrl(req));
+      res.json({ authUrl });
+    } catch (err: any) {
+      return sendApiError(
+        res,
+        400,
+        "EMAIL_CONNECT_INIT_FAILED",
+        err.message || "Could not start the email OAuth flow",
+      );
+    }
+  });
+
+  app.get("/api/email/accounts/:provider/callback", async (req, res) => {
+    try {
+      const provider = parseEmailProvider(req.params.provider);
+      if (!req.isAuthenticated()) {
+        return res.redirect("/email?error=not_authenticated");
+      }
+
+      const sessionState = (req.session as any).emailOAuthState;
+      const sessionProvider = (req.session as any).emailOAuthProvider;
+      const state = typeof req.query.state === "string" ? req.query.state : "";
+      const code = typeof req.query.code === "string" ? req.query.code : "";
+      if (!code || !state || state !== sessionState || provider !== sessionProvider) {
+        return res.redirect("/email?error=invalid_oauth_state");
+      }
+
+      const user = req.user as any;
+      await emailService.completeConnection(user.id, provider, code, getBaseUrl(req));
+      delete (req.session as any).emailOAuthState;
+      delete (req.session as any).emailOAuthProvider;
+      res.redirect("/email?connected=1");
+    } catch (err: any) {
+      res.redirect(`/email?error=${encodeURIComponent(err.message || "email_connection_failed")}`);
+    }
+  });
+
+  app.get("/api/email/accounts", requireAuth, async (req, res) => {
+    const user = req.user as any;
+    res.json(await emailService.listAccountsForUser(user.id));
+  });
+
+  app.delete("/api/email/accounts/:id", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      await emailService.disconnectAccount(Number(req.params.id), user.id);
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/email/accounts/:id/sync", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const result = await emailService.syncAccount(Number(req.params.id), user.id, getBaseUrl(req));
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/email/webhooks/google", async (req, res) => {
+    const result = await emailService.handleWebhook("google", req.body, req.query as Record<string, unknown>, getBaseUrl(req));
+    if (result.validationToken) {
+      return res.type("text/plain").send(result.validationToken);
+    }
+    res.json({ ok: true, syncedAccounts: result.syncedAccounts });
+  });
+
+  app.post("/api/email/webhooks/microsoft", async (req, res) => {
+    const result = await emailService.handleWebhook("microsoft", req.body, req.query as Record<string, unknown>, getBaseUrl(req));
+    if (result.validationToken) {
+      return res.type("text/plain").send(result.validationToken);
+    }
+    res.json({ ok: true, syncedAccounts: result.syncedAccounts });
+  });
+
+  app.get("/api/email/threads", requireAuth, async (req, res) => {
+    const user = req.user as any;
+    const executionId = req.query.executionId ? Number(req.query.executionId) : undefined;
+    const taskId = req.query.taskId ? Number(req.query.taskId) : undefined;
+    const search = typeof req.query.search === "string" ? req.query.search : undefined;
+    res.json(await emailService.listThreadsForUser(user.id, { executionId, taskId, search }));
+  });
+
+  app.get("/api/email/threads/:id", requireAuth, async (req, res) => {
+    const user = req.user as any;
+    const thread = await emailService.getThreadForUser(Number(req.params.id), user.id);
+    if (!thread) return res.status(404).json({ message: "Not found" });
+    res.json(thread);
+  });
+
+  app.post("/api/email/messages/send", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const thread = await emailService.sendMessage(user.id, req.body, getBaseUrl(req));
+      res.json(thread);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/email/threads/:id/reply", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const thread = await emailService.replyToThread(user.id, Number(req.params.id), req.body.body || "", getBaseUrl(req));
+      res.json(thread);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.post("/api/email/threads/:id/link", requireAuth, async (req, res) => {
+    try {
+      const user = req.user as any;
+      const thread = await emailService.linkThread(
+        Number(req.params.id),
+        user.id,
+        Number(req.body.executionId),
+        req.body.taskId ? Number(req.body.taskId) : undefined,
+      );
+      res.json(thread);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
   });
 
   return httpServer;

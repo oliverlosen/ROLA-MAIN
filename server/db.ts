@@ -156,12 +156,100 @@ CREATE TABLE IF NOT EXISTS message_links (
   created_at INTEGER DEFAULT ${SQLITE_NOW}
 );
 
+CREATE TABLE IF NOT EXISTS email_accounts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  provider TEXT NOT NULL,
+  email_address TEXT NOT NULL,
+  display_name TEXT,
+  provider_account_id TEXT,
+  access_token_encrypted TEXT,
+  refresh_token_encrypted TEXT,
+  token_type TEXT,
+  scopes TEXT,
+  expires_at INTEGER,
+  status TEXT NOT NULL DEFAULT 'connected',
+  last_sync_at INTEGER,
+  last_error TEXT,
+  webhook_id TEXT,
+  webhook_resource TEXT,
+  webhook_expires_at INTEGER,
+  disconnected_at INTEGER,
+  created_at INTEGER DEFAULT ${SQLITE_NOW},
+  updated_at INTEGER DEFAULT ${SQLITE_NOW}
+);
+
+CREATE TABLE IF NOT EXISTS email_threads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id INTEGER NOT NULL REFERENCES email_accounts(id),
+  provider_thread_id TEXT NOT NULL,
+  provider_conversation_id TEXT,
+  subject TEXT NOT NULL DEFAULT '',
+  snippet TEXT,
+  visibility TEXT NOT NULL DEFAULT 'private',
+  last_message_at INTEGER,
+  last_inbound_at INTEGER,
+  last_outbound_at INTEGER,
+  created_at INTEGER DEFAULT ${SQLITE_NOW},
+  updated_at INTEGER DEFAULT ${SQLITE_NOW}
+);
+
+CREATE TABLE IF NOT EXISTS email_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id INTEGER NOT NULL REFERENCES email_accounts(id),
+  thread_id INTEGER NOT NULL REFERENCES email_threads(id) ON DELETE CASCADE,
+  provider_message_id TEXT NOT NULL,
+  internet_message_id TEXT,
+  direction TEXT NOT NULL,
+  sender_email TEXT,
+  sender_name TEXT,
+  subject TEXT,
+  body_text TEXT,
+  body_html TEXT,
+  snippet TEXT,
+  in_reply_to TEXT,
+  references TEXT,
+  sent_at INTEGER,
+  synced_at INTEGER DEFAULT ${SQLITE_NOW},
+  created_at INTEGER DEFAULT ${SQLITE_NOW}
+);
+
+CREATE TABLE IF NOT EXISTS email_recipients (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id INTEGER NOT NULL REFERENCES email_messages(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  email TEXT NOT NULL,
+  name TEXT
+);
+
+CREATE TABLE IF NOT EXISTS email_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  thread_id INTEGER NOT NULL REFERENCES email_threads(id) ON DELETE CASCADE,
+  execution_id INTEGER NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
+  task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
+  linked_by INTEGER REFERENCES users(id),
+  created_at INTEGER DEFAULT ${SQLITE_NOW}
+);
+
+CREATE TABLE IF NOT EXISTS email_sync_cursors (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id INTEGER NOT NULL REFERENCES email_accounts(id) ON DELETE CASCADE,
+  cursor_type TEXT NOT NULL,
+  cursor_value TEXT,
+  payload TEXT,
+  expires_at INTEGER,
+  updated_at INTEGER DEFAULT ${SQLITE_NOW}
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique ON users (username);
 CREATE UNIQUE INDEX IF NOT EXISTS countries_name_unique ON countries (name);
 CREATE UNIQUE INDEX IF NOT EXISTS countries_code_unique ON countries (code);
 CREATE UNIQUE INDEX IF NOT EXISTS brands_name_unique ON brands (name);
 CREATE UNIQUE INDEX IF NOT EXISTS titles_name_unique ON titles (name);
 CREATE UNIQUE INDEX IF NOT EXISTS studios_name_unique ON studios (name);
+CREATE UNIQUE INDEX IF NOT EXISTS email_accounts_provider_account_unique ON email_accounts (provider, provider_account_id);
+CREATE UNIQUE INDEX IF NOT EXISTS email_threads_account_thread_unique ON email_threads (account_id, provider_thread_id);
+CREATE UNIQUE INDEX IF NOT EXISTS email_messages_account_message_unique ON email_messages (account_id, provider_message_id);
 `;
 
 export const sqliteDbPath = path.resolve(

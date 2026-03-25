@@ -1,4 +1,4 @@
-import { LayoutDashboard, FileSpreadsheet, Settings, LogOut, ChevronDown, Users, Globe, Tag, Film, Building2, Bell, MessageSquare } from "lucide-react";
+import { LayoutDashboard, FileSpreadsheet, LogOut, ChevronDown, Users, Globe, Tag, Film, Building2, Bell, MessageSquare, Mail } from "lucide-react";
 import rolaLogo from "@assets/download-1_1770410154902.jpg";
 import { useLocation, Link } from "wouter";
 import { useAuth } from "@/lib/auth";
@@ -96,6 +96,14 @@ export function AppSidebar() {
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={location.startsWith("/email")}>
+                  <Link href="/email" data-testid="link-nav-email">
+                    <Mail className="w-4 h-4" />
+                    <span>{t("sidebar.email")}</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

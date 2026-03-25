@@ -74,6 +74,21 @@ shared/
 - approver / approver123 (approve/close executions)
 - viewer / viewer123 (read-only)
 
+## Email Integration Setup
+- `/email` requires the backend API and frontend to run together. Use `npm run dev`; do not run only Vite for this module.
+- Required environment variables are listed in `.env.example`:
+  - `SESSION_SECRET`
+  - `EMAIL_TOKEN_SECRET`
+  - `GOOGLE_CLIENT_ID`
+  - `GOOGLE_CLIENT_SECRET`
+  - `MICROSOFT_CLIENT_ID`
+  - `MICROSOFT_CLIENT_SECRET`
+- Optional for Gmail push sync: `GOOGLE_GMAIL_PUBSUB_TOPIC`
+- OAuth callback URLs are generated from the current host. Typical local callbacks:
+  - `http://127.0.0.1:5000/api/email/accounts/google/callback`
+  - `http://127.0.0.1:5000/api/email/accounts/microsoft/callback`
+- Register the exact callback URL you use in Google Cloud / Microsoft Entra. If you open the app on another hostname, the callback changes with that host.
+
 ## Brand Colors
 - Primary (crimson): #9d1a30 → HSL 354 70% 35%
 - Accent (teal): #89ced0 → HSL 177 51% 48%

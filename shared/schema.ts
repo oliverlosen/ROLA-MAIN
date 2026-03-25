@@ -11,6 +11,12 @@ export const executionTypeValues = ["canje", "publicity", "third_party"] as cons
 export const currencyValues = ["GTQ", "USD", "HNL", "NIO", "CRC", "PAB", "BZD", "SVC"] as const;
 export const assetTypeValues = ["photo", "video", "clipping", "post", "contract", "other"] as const;
 export const taskStatusValues = ["pending", "in_progress", "completed", "cancelled"] as const;
+export const emailProviderValues = ["google", "microsoft"] as const;
+export const emailAccountStatusValues = ["connected", "needs_reconnect", "disconnected", "error"] as const;
+export const emailThreadVisibilityValues = ["private", "shared"] as const;
+export const emailDirectionValues = ["inbound", "outbound"] as const;
+export const emailRecipientTypeValues = ["to", "cc", "bcc"] as const;
+export const emailSyncCursorTypeValues = ["history", "delta", "subscription"] as const;
 
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -161,6 +167,91 @@ export const messageLinks = sqliteTable("message_links", {
   createdAt: integer("created_at", { mode: "timestamp_ms" }).defaultNow(),
 });
 
+export const emailAccounts = sqliteTable("email_accounts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  userId: integer("user_id").notNull().references(() => users.id),
+  provider: text("provider", { enum: emailProviderValues }).notNull(),
+  emailAddress: text("email_address").notNull(),
+  displayName: text("display_name"),
+  providerAccountId: text("provider_account_id"),
+  accessTokenEncrypted: text("access_token_encrypted"),
+  refreshTokenEncrypted: text("refresh_token_encrypted"),
+  tokenType: text("token_type"),
+  scopes: text("scopes", { mode: "json" }),
+  expiresAt: integer("expires_at", { mode: "timestamp_ms" }),
+  status: text("status", { enum: emailAccountStatusValues }).notNull().default("connected"),
+  lastSyncAt: integer("last_sync_at", { mode: "timestamp_ms" }),
+  lastError: text("last_error"),
+  webhookId: text("webhook_id"),
+  webhookResource: text("webhook_resource"),
+  webhookExpiresAt: integer("webhook_expires_at", { mode: "timestamp_ms" }),
+  disconnectedAt: integer("disconnected_at", { mode: "timestamp_ms" }),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).defaultNow(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).defaultNow(),
+});
+
+export const emailThreads = sqliteTable("email_threads", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  accountId: integer("account_id").notNull().references(() => emailAccounts.id),
+  providerThreadId: text("provider_thread_id").notNull(),
+  providerConversationId: text("provider_conversation_id"),
+  subject: text("subject").notNull().default(""),
+  snippet: text("snippet"),
+  visibility: text("visibility", { enum: emailThreadVisibilityValues }).notNull().default("private"),
+  lastMessageAt: integer("last_message_at", { mode: "timestamp_ms" }),
+  lastInboundAt: integer("last_inbound_at", { mode: "timestamp_ms" }),
+  lastOutboundAt: integer("last_outbound_at", { mode: "timestamp_ms" }),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).defaultNow(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).defaultNow(),
+});
+
+export const emailMessages = sqliteTable("email_messages", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  accountId: integer("account_id").notNull().references(() => emailAccounts.id),
+  threadId: integer("thread_id").notNull().references(() => emailThreads.id, { onDelete: "cascade" }),
+  providerMessageId: text("provider_message_id").notNull(),
+  internetMessageId: text("internet_message_id"),
+  direction: text("direction", { enum: emailDirectionValues }).notNull(),
+  senderEmail: text("sender_email"),
+  senderName: text("sender_name"),
+  subject: text("subject"),
+  bodyText: text("body_text"),
+  bodyHtml: text("body_html"),
+  snippet: text("snippet"),
+  inReplyTo: text("in_reply_to"),
+  references: text("references", { mode: "json" }),
+  sentAt: integer("sent_at", { mode: "timestamp_ms" }),
+  syncedAt: integer("synced_at", { mode: "timestamp_ms" }).defaultNow(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).defaultNow(),
+});
+
+export const emailRecipients = sqliteTable("email_recipients", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  messageId: integer("message_id").notNull().references(() => emailMessages.id, { onDelete: "cascade" }),
+  type: text("type", { enum: emailRecipientTypeValues }).notNull(),
+  email: text("email").notNull(),
+  name: text("name"),
+});
+
+export const emailLinks = sqliteTable("email_links", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  threadId: integer("thread_id").notNull().references(() => emailThreads.id, { onDelete: "cascade" }),
+  executionId: integer("execution_id").notNull().references(() => executions.id, { onDelete: "cascade" }),
+  taskId: integer("task_id").references(() => tasks.id, { onDelete: "cascade" }),
+  linkedBy: integer("linked_by").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).defaultNow(),
+});
+
+export const emailSyncCursors = sqliteTable("email_sync_cursors", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  accountId: integer("account_id").notNull().references(() => emailAccounts.id, { onDelete: "cascade" }),
+  cursorType: text("cursor_type", { enum: emailSyncCursorTypeValues }).notNull(),
+  cursorValue: text("cursor_value"),
+  payload: text("payload", { mode: "json" }),
+  expiresAt: integer("expires_at", { mode: "timestamp_ms" }),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).defaultNow(),
+});
+
 export const insertUserSchema = createInsertSchema(users).omit({ id: true });
 export const insertCountrySchema = createInsertSchema(countries).omit({ id: true });
 export const insertBrandSchema = createInsertSchema(brands).omit({ id: true });
@@ -179,6 +270,27 @@ export const insertNotificationSchema = createInsertSchema(notifications).omit({
 export const insertConversationSchema = createInsertSchema(conversations).omit({ id: true, createdAt: true });
 export const insertMessageSchema = createInsertSchema(messages).omit({ id: true, createdAt: true });
 export const insertMessageLinkSchema = createInsertSchema(messageLinks).omit({ id: true, createdAt: true });
+export const insertEmailAccountSchema = createInsertSchema(emailAccounts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertEmailThreadSchema = createInsertSchema(emailThreads).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertEmailMessageSchema = createInsertSchema(emailMessages).omit({
+  id: true,
+  createdAt: true,
+  syncedAt: true,
+});
+export const insertEmailRecipientSchema = createInsertSchema(emailRecipients).omit({ id: true });
+export const insertEmailLinkSchema = createInsertSchema(emailLinks).omit({ id: true, createdAt: true });
+export const insertEmailSyncCursorSchema = createInsertSchema(emailSyncCursors).omit({
+  id: true,
+  updatedAt: true,
+});
 
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
@@ -209,6 +321,18 @@ export type Message = typeof messages.$inferSelect;
 export type InsertMessage = z.infer<typeof insertMessageSchema>;
 export type MessageLink = typeof messageLinks.$inferSelect;
 export type InsertMessageLink = z.infer<typeof insertMessageLinkSchema>;
+export type EmailAccount = typeof emailAccounts.$inferSelect;
+export type InsertEmailAccount = z.infer<typeof insertEmailAccountSchema>;
+export type EmailThread = typeof emailThreads.$inferSelect;
+export type InsertEmailThread = z.infer<typeof insertEmailThreadSchema>;
+export type EmailMessage = typeof emailMessages.$inferSelect;
+export type InsertEmailMessage = z.infer<typeof insertEmailMessageSchema>;
+export type EmailRecipient = typeof emailRecipients.$inferSelect;
+export type InsertEmailRecipient = z.infer<typeof insertEmailRecipientSchema>;
+export type EmailLink = typeof emailLinks.$inferSelect;
+export type InsertEmailLink = z.infer<typeof insertEmailLinkSchema>;
+export type EmailSyncCursor = typeof emailSyncCursors.$inferSelect;
+export type InsertEmailSyncCursor = z.infer<typeof insertEmailSyncCursorSchema>;
 
 export type TaskWithAssignee = Task & {
   assignee?: Pick<User, "id" | "displayName" | "username"> | null;
@@ -234,6 +358,42 @@ export type ConversationWithDetails = Conversation & {
   unreadCount?: number;
   lastMessage?: { body: string; createdAt: Date | null; senderName?: string } | null;
   memberCount?: number;
+};
+
+export type EmailAccountSafe = Omit<EmailAccount, "accessTokenEncrypted" | "refreshTokenEncrypted"> & {
+  readOnly?: boolean;
+};
+
+export type EmailMessageWithRecipients = EmailMessage & {
+  recipients?: EmailRecipient[];
+};
+
+export type EmailThreadWithDetails = EmailThread & {
+  account?: EmailAccountSafe | null;
+  messages?: EmailMessageWithRecipients[];
+  links?: EmailLinkWithContext[];
+  pendingResponse?: boolean;
+  messageCount?: number;
+  latestMessage?: EmailMessageWithRecipients | null;
+  canReply?: boolean;
+};
+
+export type EmailLinkWithContext = EmailLink & {
+  execution?: Pick<Execution, "id"> & {
+    brandName?: string | null;
+    titleName?: string | null;
+  };
+  task?: Pick<Task, "id" | "title" | "status"> | null;
+};
+
+export type EmailSyncStatus = {
+  accountId: number;
+  provider: (typeof emailProviderValues)[number];
+  syncedMessages: number;
+  newMessages: number;
+  lastSyncAt: Date | null;
+  status: (typeof emailAccountStatusValues)[number];
+  error?: string | null;
 };
 
 export const loginSchema = z.object({
