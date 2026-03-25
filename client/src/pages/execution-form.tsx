@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Form, FormField, FormItem, FormLabel, FormControl, FormMessage } from "@/components/ui/form";
+import { Form, FormField, FormItem, FormLabel, FormControl, FormDescription, FormMessage } from "@/components/ui/form";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ArrowLeft, Loader2, Save } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -18,13 +18,16 @@ import { useAuth } from "@/lib/auth";
 import { useLanguage } from "@/lib/i18n";
 import { useToast } from "@/hooks/use-toast";
 import { CURRENCY_SYMBOLS } from "@shared/schema";
-import type { Country, Brand, Title, Studio, Execution } from "@shared/schema";
+import type { Country, Brand, Title, Studio, Execution, CrmAccountWithSummary, CrmCampaign, CrmContact } from "@shared/schema";
 
 const formSchema = z.object({
   countryId: z.coerce.number().min(1, "Country is required"),
   brandId: z.coerce.number().min(1, "Brand is required"),
   titleId: z.coerce.number().optional().nullable(),
   studioId: z.coerce.number().optional().nullable(),
+  accountId: z.coerce.number().optional().nullable(),
+  campaignId: z.coerce.number().optional().nullable(),
+  primaryContactId: z.coerce.number().optional().nullable(),
   executionDate: z.string().min(1, "Date is required"),
   executionType: z.enum(["canje", "publicity", "third_party"]),
   mediaValueLocal: z.string().min(1, "Value is required"),
@@ -34,6 +37,8 @@ const formSchema = z.object({
   fxDate: z.string().optional(),
   notes: z.string().optional(),
   dueDate: z.string().optional(),
+  plannedStartDate: z.string().optional(),
+  plannedEndDate: z.string().optional(),
   hasClipping: z.boolean().default(false),
   hasPhotos: z.boolean().default(false),
   hasLinks: z.boolean().default(false),
@@ -72,6 +77,7 @@ export default function ExecutionFormPage() {
   const { data: brands } = useQuery<Brand[]>({ queryKey: ["/api/brands"] });
   const { data: titlesList } = useQuery<Title[]>({ queryKey: ["/api/titles"] });
   const { data: studiosList } = useQuery<Studio[]>({ queryKey: ["/api/studios"] });
+  const { data: accounts } = useQuery<CrmAccountWithSummary[]>({ queryKey: ["/api/accounts"] });
 
   const { data: existing, isLoading: loadingExisting } = useQuery<Execution>({
     queryKey: ["/api/executions", params.id],
@@ -85,6 +91,9 @@ export default function ExecutionFormPage() {
       brandId: 0,
       titleId: null,
       studioId: null,
+      accountId: null,
+      campaignId: null,
+      primaryContactId: null,
       executionDate: "",
       executionType: "publicity",
       mediaValueLocal: "",
@@ -94,6 +103,8 @@ export default function ExecutionFormPage() {
       fxDate: "",
       notes: "",
       dueDate: "",
+      plannedStartDate: "",
+      plannedEndDate: "",
       hasClipping: false,
       hasPhotos: false,
       hasLinks: false,
@@ -109,6 +120,9 @@ export default function ExecutionFormPage() {
         brandId: existing.brandId,
         titleId: existing.titleId || null,
         studioId: existing.studioId || null,
+        accountId: existing.accountId || null,
+        campaignId: existing.campaignId || null,
+        primaryContactId: existing.primaryContactId || null,
         executionDate: existing.executionDate || "",
         executionType: existing.executionType as any,
         mediaValueLocal: existing.mediaValueLocal || "",
@@ -118,6 +132,8 @@ export default function ExecutionFormPage() {
         fxDate: existing.fxDate || "",
         notes: existing.notes || "",
         dueDate: existing.dueDate || "",
+        plannedStartDate: existing.plannedStartDate || "",
+        plannedEndDate: existing.plannedEndDate || "",
         hasClipping: existing.hasClipping || false,
         hasPhotos: existing.hasPhotos || false,
         hasLinks: existing.hasLinks || false,
@@ -126,6 +142,35 @@ export default function ExecutionFormPage() {
       });
     }
   }, [existing, isEdit, form]);
+
+  const selectedAccountId = form.watch("accountId");
+  const { data: accountContacts } = useQuery<CrmContact[]>({
+    queryKey: [`/api/accounts/${selectedAccountId}/contacts`],
+    enabled: Boolean(selectedAccountId),
+  });
+  const { data: accountCampaigns } = useQuery<CrmCampaign[]>({
+    queryKey: [`/api/accounts/${selectedAccountId}/campaigns`],
+    enabled: Boolean(selectedAccountId),
+  });
+
+  useEffect(() => {
+    const currentCampaignId = form.getValues("campaignId");
+    const currentContactId = form.getValues("primaryContactId");
+
+    if (!selectedAccountId) {
+      if (currentCampaignId) form.setValue("campaignId", null);
+      if (currentContactId) form.setValue("primaryContactId", null);
+      return;
+    }
+
+    if (currentCampaignId && accountCampaigns && !accountCampaigns.some((campaign) => campaign.id === currentCampaignId)) {
+      form.setValue("campaignId", null);
+    }
+
+    if (currentContactId && accountContacts && !accountContacts.some((contact) => contact.id === currentContactId)) {
+      form.setValue("primaryContactId", null);
+    }
+  }, [selectedAccountId, accountCampaigns, accountContacts, form]);
 
   const localCurrency = form.watch("localCurrency");
   const mediaValueLocal = form.watch("mediaValueLocal");
@@ -145,8 +190,13 @@ export default function ExecutionFormPage() {
         ...data,
         titleId: data.titleId || null,
         studioId: data.studioId || null,
+        accountId: data.accountId || null,
+        campaignId: data.campaignId || null,
+        primaryContactId: data.primaryContactId || null,
         fxDate: data.fxDate || null,
         dueDate: data.dueDate || null,
+        plannedStartDate: data.plannedStartDate || null,
+        plannedEndDate: data.plannedEndDate || null,
         mediaValueUsd: computedUsd.toFixed(2),
         ownerId: user?.id,
         createdBy: user?.id,
@@ -275,6 +325,101 @@ export default function ExecutionFormPage() {
                   <FormMessage />
                 </FormItem>
               )} />
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField control={form.control} name="plannedStartDate" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("automation.plannedStartDate")}</FormLabel>
+                    <FormControl><Input type="date" {...field} data-testid="input-planned-start-date" /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+                <FormField control={form.control} name="plannedEndDate" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("automation.plannedEndDate")}</FormLabel>
+                    <FormControl><Input type="date" {...field} data-testid="input-planned-end-date" /></FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <h2 className="text-sm font-semibold">{t("crm.crmContext")}</h2>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <FormField control={form.control} name="accountId" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("crm.account")}</FormLabel>
+                    <Select onValueChange={(value) => field.onChange(value === "none" ? null : Number(value))} value={field.value ? String(field.value) : "none"}>
+                      <FormControl>
+                        <SelectTrigger data-testid="select-account">
+                          <SelectValue placeholder={t("crm.selectAccount")} />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="none">{t("crm.none")}</SelectItem>
+                        {accounts?.map((account) => (
+                          <SelectItem key={account.id} value={String(account.id)}>{account.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormDescription>{t("crm.executionFormAccountHint")}</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                <FormField control={form.control} name="campaignId" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("crm.campaign")}</FormLabel>
+                    <Select
+                      onValueChange={(value) => field.onChange(value === "none" ? null : Number(value))}
+                      value={field.value ? String(field.value) : "none"}
+                      disabled={!selectedAccountId}
+                    >
+                      <FormControl>
+                        <SelectTrigger data-testid="select-campaign">
+                          <SelectValue placeholder={t("crm.selectCampaign")} />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="none">{t("crm.none")}</SelectItem>
+                        {accountCampaigns?.map((campaign) => (
+                          <SelectItem key={campaign.id} value={String(campaign.id)}>{campaign.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+
+                <FormField control={form.control} name="primaryContactId" render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("crm.primaryContact")}</FormLabel>
+                    <Select
+                      onValueChange={(value) => field.onChange(value === "none" ? null : Number(value))}
+                      value={field.value ? String(field.value) : "none"}
+                      disabled={!selectedAccountId}
+                    >
+                      <FormControl>
+                        <SelectTrigger data-testid="select-primary-contact">
+                          <SelectValue placeholder={t("crm.selectContact")} />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="none">{t("crm.none")}</SelectItem>
+                        {accountContacts?.map((contact) => (
+                          <SelectItem key={contact.id} value={String(contact.id)}>{contact.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )} />
+              </div>
             </CardContent>
           </Card>
 

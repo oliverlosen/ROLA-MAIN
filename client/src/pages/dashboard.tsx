@@ -2,12 +2,15 @@ import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { DollarSign, FileSpreadsheet, TrendingUp, PieChart } from "lucide-react";
+import { DollarSign, FileSpreadsheet, TrendingUp, PieChart, TriangleAlert, Clock3, MessageCircleReply, Siren } from "lucide-react";
 import { useLanguage } from "@/lib/i18n";
+import { AutomationAlertList } from "@/components/automation-alert-list";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart as RechartPie, Pie, Cell, CartesianGrid, Legend,
 } from "recharts";
 import { GlobalFilters, useFilters } from "@/components/global-filters";
+import type { OperationalRiskSummary } from "@shared/schema";
+import { useLocation } from "wouter";
 
 const CHART_COLORS = [
   "hsl(177, 51%, 48%)",
@@ -26,6 +29,7 @@ function formatUSD(val: number) {
 export default function DashboardPage() {
   const { filters, filterParams } = useFilters();
   const { t } = useLanguage();
+  const [, navigate] = useLocation();
 
   const statusLabel = (s: string) => {
     const map: Record<string, string> = {
@@ -59,6 +63,10 @@ export default function DashboardPage() {
     trend: { period: string; value: number }[];
   }>({
     queryKey: ["/api/dashboard", filterParams],
+  });
+
+  const { data: riskSummary } = useQuery<OperationalRiskSummary>({
+    queryKey: ["/api/dashboard/operational-risk"],
   });
 
   return (
@@ -104,6 +112,33 @@ export default function DashboardPage() {
               value={stats.byType.length.toString()}
               icon={<PieChart className="w-4 h-4" />}
               testId="kpi-types"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <KPICard
+              title={t("automation.atRisk")}
+              value={String(riskSummary?.highSeverityCount || 0)}
+              icon={<TriangleAlert className="w-4 h-4" />}
+              testId="kpi-risk-high"
+            />
+            <KPICard
+              title={t("automation.overdueTasks")}
+              value={String(riskSummary?.overdueTaskCount || 0)}
+              icon={<Clock3 className="w-4 h-4" />}
+              testId="kpi-overdue-tasks"
+            />
+            <KPICard
+              title={t("automation.overdueExecutions")}
+              value={String(riskSummary?.overdueExecutionCount || 0)}
+              icon={<Siren className="w-4 h-4" />}
+              testId="kpi-overdue-executions"
+            />
+            <KPICard
+              title={t("automation.pendingReplies")}
+              value={String(riskSummary?.pendingReplyCount || 0)}
+              icon={<MessageCircleReply className="w-4 h-4" />}
+              testId="kpi-pending-replies"
             />
           </div>
 
@@ -256,6 +291,32 @@ export default function DashboardPage() {
               </CardContent>
             </Card>
           </div>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold">{t("automation.topAlerts")}</h3>
+                <Badge variant="outline">{riskSummary?.openAlertCount || 0}</Badge>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <AutomationAlertList
+                alerts={riskSummary?.topAlerts}
+                emptyMessage={t("automation.noAlerts")}
+                onOpen={(alert) => {
+                  if (alert.executionId) {
+                    navigate(`/executions/${alert.executionId}`);
+                    return;
+                  }
+                  if (alert.campaignId) {
+                    navigate(`/campaigns/${alert.campaignId}`);
+                  }
+                }}
+                openLabel={t("executions.view")}
+                limit={5}
+              />
+            </CardContent>
+          </Card>
         </>
       ) : null}
     </div>

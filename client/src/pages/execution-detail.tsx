@@ -9,13 +9,27 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { ArrowLeft, Pencil, Check, X, Plus, Link as LinkIcon, FileText, Clock, MessageSquare, ChevronDown, ChevronUp, Mail } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
+import { AutomationAlertList } from "@/components/automation-alert-list";
+import { GanttChart } from "@/components/gantt-chart";
+import { ArrowLeft, Pencil, Check, X, Plus, Link as LinkIcon, FileText, Clock, MessageSquare, ChevronDown, ChevronUp, Mail, BriefcaseBusiness, Users } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useLanguage } from "@/lib/i18n";
 import { useToast } from "@/hooks/use-toast";
 import { CURRENCY_SYMBOLS } from "@shared/schema";
-import type { ExecutionWithDetails, Asset, StatusHistoryEntry, TaskWithAssignee, User, EmailThreadWithDetails } from "@shared/schema";
+import type {
+  ExecutionWithDetails,
+  Asset,
+  StatusHistoryEntry,
+  TaskWithAssignee,
+  User,
+  EmailThreadWithDetails,
+  AccountWithDetails,
+  ExecutionActivityItem,
+  AutomationAlertWithContext,
+  ExecutionGanttItem,
+} from "@shared/schema";
 import { format } from "date-fns";
 import { useMemo, useState } from "react";
 
@@ -49,6 +63,8 @@ export default function ExecutionDetailPage() {
   const [taskDescription, setTaskDescription] = useState("");
   const [taskAssignedTo, setTaskAssignedTo] = useState<string>("");
   const [taskDueDate, setTaskDueDate] = useState("");
+  const [taskStartDate, setTaskStartDate] = useState("");
+  const [taskEndDate, setTaskEndDate] = useState("");
   const [taskStatus, setTaskStatus] = useState("pending");
   const [expandedTaskId, setExpandedTaskId] = useState<number | null>(null);
   const [editingStatusTaskId, setEditingStatusTaskId] = useState<number | null>(null);
@@ -98,6 +114,23 @@ export default function ExecutionDetailPage() {
     queryKey: [`/api/email/threads?executionId=${id}`],
   });
 
+  const { data: accountDetail } = useQuery<AccountWithDetails>({
+    queryKey: ["/api/accounts", String(exec?.accountId || 0)],
+    enabled: Boolean(exec?.accountId),
+  });
+
+  const { data: activity } = useQuery<ExecutionActivityItem[]>({
+    queryKey: ["/api/executions", id, "activity"],
+  });
+
+  const { data: automationAlerts } = useQuery<AutomationAlertWithContext[]>({
+    queryKey: ["/api/executions", id, "alerts"],
+  });
+
+  const { data: gantt } = useQuery<ExecutionGanttItem>({
+    queryKey: ["/api/executions", id, "gantt"],
+  });
+
   const statusMutation = useMutation({
     mutationFn: async (newStatus: string) => {
       await apiRequest("PATCH", `/api/executions/${id}/status`, { status: newStatus });
@@ -105,6 +138,8 @@ export default function ExecutionDetailPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/executions", id] });
       queryClient.invalidateQueries({ queryKey: ["/api/executions", id, "history"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/executions", id, "alerts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/executions", id, "gantt"] });
       toast({ title: t("executionDetail.statusUpdated") });
     },
     onError: (e: any) => toast({ title: t("executionForm.error"), description: e.message, variant: "destructive" }),
@@ -122,6 +157,7 @@ export default function ExecutionDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/executions", id, "assets"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/executions", id, "alerts"] });
       setAddAssetOpen(false);
       setAssetUrl("");
       setAssetType("other");
@@ -142,15 +178,21 @@ export default function ExecutionDetailPage() {
       if (taskDescription) data.description = taskDescription;
       if (taskAssignedTo) data.assignedTo = Number(taskAssignedTo);
       if (taskDueDate) data.dueDate = taskDueDate;
+      if (taskStartDate) data.startDate = taskStartDate;
+      if (taskEndDate) data.endDate = taskEndDate;
       await apiRequest("POST", `/api/executions/${id}/tasks`, data);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/executions", id, "tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/executions", id, "alerts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/executions", id, "gantt"] });
       setAddTaskOpen(false);
       setTaskTitle("");
       setTaskDescription("");
       setTaskAssignedTo("");
       setTaskDueDate("");
+      setTaskStartDate("");
+      setTaskEndDate("");
       setTaskStatus("pending");
       toast({ title: t("tasks.addTask") });
     },
@@ -163,6 +205,8 @@ export default function ExecutionDetailPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/executions", id, "tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/executions", id, "alerts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/executions", id, "gantt"] });
       setEditingStatusTaskId(null);
     },
     onError: (e: any) => toast({ title: t("executionForm.error"), description: e.message, variant: "destructive" }),
@@ -202,11 +246,24 @@ export default function ExecutionDetailPage() {
     return summary;
   }, [emailThreads]);
 
+  const openAlerts = useMemo(
+    () => (automationAlerts || []).filter((alert) => alert.status === "open"),
+    [automationAlerts],
+  );
+
   if (isLoading) return <div className="p-6"><Skeleton className="h-96 w-full" /></div>;
   if (!exec) return <div className="p-6 text-center text-muted-foreground">{t("executionDetail.executionNotFound")}</div>;
 
   const currentIdx = STATUS_ORDER.indexOf(exec.status);
   const nextStatus = currentIdx < STATUS_ORDER.length - 1 ? STATUS_ORDER[currentIdx + 1] : null;
+  const openAutomationAlert = (alert: AutomationAlertWithContext) => {
+    const payload = alert.payload as any;
+    if (payload?.threadId) {
+      navigate(`/email?threadId=${payload.threadId}`);
+      return;
+    }
+    navigate(`/executions/${id}`);
+  };
 
   return (
     <div className="p-4 md:p-6 max-w-4xl mx-auto space-y-4">
@@ -286,6 +343,123 @@ export default function ExecutionDetailPage() {
 
           <Card>
             <CardHeader className="pb-3">
+              <h2 className="text-sm font-semibold flex items-center gap-2">
+                <BriefcaseBusiness className="w-4 h-4" />
+                {t("crm.crmContext")}
+              </h2>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                <DetailRow
+                  label={t("crm.account")}
+                  value={exec.account ? exec.account.name : t("crm.noAccountLinked")}
+                />
+                <DetailRow
+                  label={t("crm.campaign")}
+                  value={exec.campaign?.name || "-"}
+                />
+                <DetailRow
+                  label={t("crm.primaryContact")}
+                  value={exec.primaryContact?.name || "-"}
+                />
+              </div>
+              {exec.account?.id ? (
+                <div className="flex items-center justify-between gap-2 rounded-md bg-muted px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{exec.account.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {accountDetail?.description || t("crm.noDescription")}
+                    </p>
+                  </div>
+                  <Link href={`/accounts/${exec.account.id}`}>
+                    <Button variant="outline" size="sm">{t("crm.viewAccount")}</Button>
+                  </Link>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">{t("crm.executionDetailNoContext")}</p>
+              )}
+            </CardContent>
+          </Card>
+
+          {accountDetail?.contacts && accountDetail.contacts.length > 0 && (
+            <Card>
+              <CardHeader className="pb-3">
+                <h2 className="text-sm font-semibold flex items-center gap-2">
+                  <Users className="w-4 h-4" />
+                  {t("crm.relatedContacts")}
+                </h2>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  {accountDetail.contacts.map((contact) => (
+                    <div key={contact.id} className="rounded-md border p-3 text-sm">
+                      <p className="font-medium">{contact.name}</p>
+                      <p className="text-muted-foreground">{contact.jobTitle || "-"}</p>
+                      <div className="flex flex-wrap gap-3 mt-2 text-xs text-muted-foreground">
+                        {contact.email ? <span>{contact.email}</span> : null}
+                        {contact.phone ? <span>{contact.phone}</span> : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold">{t("automation.executionGantt")}</h2>
+                  <p className="text-xs text-muted-foreground">{t("automation.executionGanttHint")}</p>
+                </div>
+                <div className="text-right min-w-[120px]">
+                  <p className="text-xs text-muted-foreground">{t("automation.progress")}</p>
+                  <p className="text-lg font-semibold">{gantt?.progress ?? 0}%</p>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <Progress value={gantt?.progress ?? 0} />
+              <GanttChart
+                rows={(gantt?.tasks || []).map((task) => ({
+                  id: task.id,
+                  label: task.title,
+                  secondary: task.assignee?.displayName || t("tasks.unassigned"),
+                  rangeStart: task.rangeStart,
+                  rangeEnd: task.rangeEnd,
+                  progress: task.progress,
+                  statusLabel: taskStatusLabel(task.status),
+                }))}
+                rangeStart={gantt?.rangeStart}
+                rangeEnd={gantt?.rangeEnd}
+                emptyMessage={t("automation.noGanttTasks")}
+              />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold">{t("automation.alerts")}</h2>
+                  <p className="text-xs text-muted-foreground">{t("automation.notifyOnly")}</p>
+                </div>
+                <Badge variant="outline">{openAlerts.length}</Badge>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <AutomationAlertList
+                alerts={automationAlerts}
+                emptyMessage={t("automation.noAlerts")}
+                onOpen={openAutomationAlert}
+                openLabel={t("executions.view")}
+              />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
               <h2 className="text-sm font-semibold">{t("executionDetail.mediaValue")}</h2>
             </CardHeader>
             <CardContent>
@@ -330,6 +504,16 @@ export default function ExecutionDetailPage() {
             <Card>
               <CardHeader className="pb-3"><h2 className="text-sm font-semibold">{t("executionDetail.workflow")}</h2></CardHeader>
               <CardContent className="space-y-3">
+                {openAlerts.length > 0 ? (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+                    <p className="font-medium">{t("automation.workflowWarningTitle")}</p>
+                    <div className="mt-1 space-y-1">
+                      {openAlerts.slice(0, 3).map((alert) => (
+                        <p key={alert.id}>• {alert.title}</p>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <div className="space-y-1">
                   {STATUS_ORDER.map((s, i) => (
                     <div key={s} className={`flex items-center gap-2 text-xs py-1 ${i <= currentIdx ? "text-foreground" : "text-muted-foreground"}`}>
@@ -520,6 +704,16 @@ export default function ExecutionDetailPage() {
                         <Label>{t("tasks.dueDate")}</Label>
                         <Input type="date" value={taskDueDate} onChange={e => setTaskDueDate(e.target.value)} data-testid="input-task-due-date" />
                       </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                          <Label>{t("automation.startDate")}</Label>
+                          <Input type="date" value={taskStartDate} onChange={e => setTaskStartDate(e.target.value)} data-testid="input-task-start-date" />
+                        </div>
+                        <div>
+                          <Label>{t("automation.endDate")}</Label>
+                          <Input type="date" value={taskEndDate} onChange={e => setTaskEndDate(e.target.value)} data-testid="input-task-end-date" />
+                        </div>
+                      </div>
                       <div>
                         <Label>{t("tasks.status")}</Label>
                         <Select value={taskStatus} onValueChange={setTaskStatus}>
@@ -609,6 +803,11 @@ export default function ExecutionDetailPage() {
                       {expandedTaskId === task.id && (
                         <div className="mt-2 pt-2 border-t text-xs space-y-1">
                           {task.description && <p className="whitespace-pre-wrap">{task.description}</p>}
+                          {(task.startDate || task.endDate) ? (
+                            <p className="text-muted-foreground">
+                              {t("automation.startDate")}: {task.startDate || "-"} · {t("automation.endDate")}: {task.endDate || task.dueDate || "-"}
+                            </p>
+                          ) : null}
                           {task.creator && (
                             <p className="text-muted-foreground">{t("tasks.createdBy")}: {task.creator.displayName}</p>
                           )}
@@ -624,6 +823,36 @@ export default function ExecutionDetailPage() {
           </Card>
         </div>
       </div>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <h2 className="text-sm font-semibold">{t("crm.activityTimeline")}</h2>
+        </CardHeader>
+        <CardContent>
+          {activity && activity.length > 0 ? (
+            <div className="space-y-3">
+              {activity.map((item, index) => (
+                <div key={`${item.type}-${item.entityId}-${index}`} className="flex items-start justify-between gap-3 rounded-md border p-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">{item.title}</p>
+                    {item.description ? <p className="text-sm text-muted-foreground whitespace-pre-wrap">{item.description}</p> : null}
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {item.actor || "System"} · {item.timestamp ? format(new Date(item.timestamp), "MMM d, yyyy h:mm a") : "-"}
+                    </p>
+                  </div>
+                  {item.href ? (
+                    <Button variant="ghost" size="sm" onClick={() => navigate(item.href!)}>
+                      {t("executions.view")}
+                    </Button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground text-center py-4">{t("chat.noActivityYet")}</p>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

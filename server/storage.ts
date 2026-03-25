@@ -1,13 +1,17 @@
 import { eq, and, desc, asc, sql, gte, lte, inArray, count, isNull, ne, gt } from "drizzle-orm";
 import { db } from "./db";
 import {
-  users, countries, brands, titles, studios, executions, assets, statusHistory, fxDefaults,
+  users, countries, brands, titles, studios, crmAccounts, crmContacts, crmCampaigns,
+  executions, assets, statusHistory, fxDefaults,
   tasks, notifications, conversations, conversationMembers, messages, messageLinks,
+  emailAccounts, emailLinks, emailMessages, emailThreads,
   type InsertUser, type User, type InsertCountry, type Country,
   type InsertBrand, type Brand, type InsertTitle, type Title,
+  type CrmAccount, type InsertCrmAccount, type CrmContact, type InsertCrmContact,
+  type CrmCampaign, type InsertCrmCampaign, type CampaignWithDetails,
   type InsertStudio, type Studio, type InsertExecution, type Execution,
   type InsertAsset, type Asset, type InsertStatusHistory, type StatusHistoryEntry,
-  type ExecutionWithDetails,
+  type ExecutionWithDetails, type ExecutionActivityItem, type AccountWithDetails, type CrmAccountWithSummary,
   type Task, type InsertTask, type TaskWithAssignee,
   type Notification, type InsertNotification, type NotificationWithActor,
   type Conversation, type InsertConversation, type ConversationWithDetails,
@@ -44,8 +48,23 @@ export interface IStorage {
   updateStudio(id: number, s: Partial<InsertStudio>): Promise<Studio | undefined>;
   deleteStudio(id: number): Promise<void>;
 
+  getAccounts(): Promise<CrmAccountWithSummary[]>;
+  getAccount(id: number): Promise<AccountWithDetails | undefined>;
+  createAccount(account: InsertCrmAccount): Promise<CrmAccount>;
+  updateAccount(id: number, account: Partial<InsertCrmAccount>): Promise<CrmAccount | undefined>;
+  getContactsByAccount(accountId: number): Promise<CrmContact[]>;
+  createContact(contact: InsertCrmContact): Promise<CrmContact>;
+  updateContact(id: number, contact: Partial<InsertCrmContact>): Promise<CrmContact | undefined>;
+  getCampaignsByAccount(accountId: number): Promise<CrmCampaign[]>;
+  getCampaign(id: number): Promise<CampaignWithDetails | undefined>;
+  createCampaign(campaign: InsertCrmCampaign): Promise<CrmCampaign>;
+  updateCampaign(id: number, campaign: Partial<InsertCrmCampaign>): Promise<CrmCampaign | undefined>;
+  getExecutionsForCampaign(campaignId: number): Promise<ExecutionWithDetails[]>;
+
   getExecutions(filters: any): Promise<{ executions: ExecutionWithDetails[]; total: number }>;
   getExecution(id: number): Promise<ExecutionWithDetails | undefined>;
+  getExecutionsForAccount(accountId: number): Promise<ExecutionWithDetails[]>;
+  getExecutionActivity(executionId: number): Promise<ExecutionActivityItem[]>;
   createExecution(e: InsertExecution): Promise<Execution>;
   updateExecution(id: number, e: Partial<InsertExecution>): Promise<Execution | undefined>;
   updateExecutionStatus(id: number, status: string, userId: number): Promise<void>;
@@ -196,6 +215,274 @@ export class DatabaseStorage implements IStorage {
     await db.delete(studios).where(eq(studios.id, id));
   }
 
+  private async getSafeUserById(userId?: number | null) {
+    if (!userId) return null;
+    const [user] = await db.select({
+      id: users.id,
+      displayName: users.displayName,
+      username: users.username,
+    }).from(users).where(eq(users.id, userId));
+    return user || null;
+  }
+
+  private async getAccountRow(accountId?: number | null): Promise<CrmAccount | undefined> {
+    if (!accountId) return undefined;
+    const [account] = await db.select().from(crmAccounts).where(eq(crmAccounts.id, accountId));
+    return account;
+  }
+
+  private async getContactRow(contactId?: number | null): Promise<CrmContact | undefined> {
+    if (!contactId) return undefined;
+    const [contact] = await db.select().from(crmContacts).where(eq(crmContacts.id, contactId));
+    return contact;
+  }
+
+  private async getCampaignRow(campaignId?: number | null): Promise<CrmCampaign | undefined> {
+    if (!campaignId) return undefined;
+    const [campaign] = await db.select().from(crmCampaigns).where(eq(crmCampaigns.id, campaignId));
+    return campaign;
+  }
+
+  private async validateExecutionCrmContext(input: {
+    accountId?: number | null;
+    campaignId?: number | null;
+    primaryContactId?: number | null;
+  }) {
+    const accountId = input.accountId ?? null;
+    const campaignId = input.campaignId ?? null;
+    const primaryContactId = input.primaryContactId ?? null;
+
+    if (!accountId && (campaignId || primaryContactId)) {
+      throw new Error("Select an account before choosing a campaign or primary contact");
+    }
+
+    if (accountId) {
+      const account = await this.getAccountRow(accountId);
+      if (!account) throw new Error("Account not found");
+    }
+
+    if (campaignId) {
+      const campaign = await this.getCampaignRow(campaignId);
+      if (!campaign) throw new Error("Campaign not found");
+      if (campaign.accountId !== accountId) {
+        throw new Error("Campaign does not belong to the selected account");
+      }
+    }
+
+    if (primaryContactId) {
+      const contact = await this.getContactRow(primaryContactId);
+      if (!contact) throw new Error("Primary contact not found");
+      if (contact.accountId !== accountId) {
+        throw new Error("Primary contact does not belong to the selected account");
+      }
+    }
+  }
+
+  private async enrichAccount(account: CrmAccount): Promise<CrmAccountWithSummary> {
+    const owner = await this.getSafeUserById(account.ownerId);
+    const [contactCountResult] = await db.select({ count: count() }).from(crmContacts)
+      .where(eq(crmContacts.accountId, account.id));
+    const [campaignCountResult] = await db.select({ count: count() }).from(crmCampaigns)
+      .where(eq(crmCampaigns.accountId, account.id));
+    const [executionCountResult] = await db.select({ count: count() }).from(executions)
+      .where(eq(executions.accountId, account.id));
+
+    return {
+      ...account,
+      owner,
+      contactCount: Number(contactCountResult?.count || 0),
+      campaignCount: Number(campaignCountResult?.count || 0),
+      executionCount: Number(executionCountResult?.count || 0),
+    };
+  }
+
+  private async enrichExecutionRow(row: Execution): Promise<ExecutionWithDetails> {
+    const [country] = row.countryId ? await db.select().from(countries).where(eq(countries.id, row.countryId)) : [undefined];
+    const [brand] = row.brandId ? await db.select().from(brands).where(eq(brands.id, row.brandId)) : [undefined];
+    const [title] = row.titleId ? await db.select().from(titles).where(eq(titles.id, row.titleId)) : [undefined];
+    const [studio] = row.studioId ? await db.select().from(studios).where(eq(studios.id, row.studioId)) : [undefined];
+    const owner = await this.getSafeUserById(row.ownerId);
+    const account = row.accountId ? await this.getAccountRow(row.accountId) : undefined;
+    const campaign = row.campaignId ? await this.getCampaignRow(row.campaignId) : undefined;
+    const primaryContact = row.primaryContactId ? await this.getContactRow(row.primaryContactId) : undefined;
+
+    return {
+      ...row,
+      country: country || undefined,
+      brand: brand || undefined,
+      title: title || null,
+      studio: studio || null,
+      owner,
+      account: account ? await this.enrichAccount(account) : null,
+      campaign: campaign || null,
+      primaryContact: primaryContact || null,
+    };
+  }
+
+  async getAccounts(): Promise<CrmAccountWithSummary[]> {
+    const rows = await db.select().from(crmAccounts).orderBy(asc(crmAccounts.name));
+    return Promise.all(rows.map((row) => this.enrichAccount(row)));
+  }
+
+  async getContactsByAccount(accountId: number): Promise<CrmContact[]> {
+    return db.select().from(crmContacts)
+      .where(eq(crmContacts.accountId, accountId))
+      .orderBy(asc(crmContacts.name));
+  }
+
+  async getCampaignsByAccount(accountId: number): Promise<CrmCampaign[]> {
+    return db.select().from(crmCampaigns)
+      .where(eq(crmCampaigns.accountId, accountId))
+      .orderBy(desc(crmCampaigns.updatedAt), asc(crmCampaigns.name));
+  }
+
+  async getCampaign(id: number): Promise<CampaignWithDetails | undefined> {
+    const campaign = await this.getCampaignRow(id);
+    if (!campaign) return undefined;
+    const account = await this.getAccountRow(campaign.accountId);
+    const linkedExecutions = await this.getExecutionsForCampaign(campaign.id);
+
+    return {
+      ...campaign,
+      account: account ? await this.enrichAccount(account) : null,
+      executions: linkedExecutions,
+    };
+  }
+
+  async createAccount(account: InsertCrmAccount): Promise<CrmAccount> {
+    const [created] = await db.insert(crmAccounts).values(account).returning();
+    return created;
+  }
+
+  async updateAccount(id: number, account: Partial<InsertCrmAccount>): Promise<CrmAccount | undefined> {
+    const [updated] = await db.update(crmAccounts)
+      .set({ ...account, updatedAt: new Date() })
+      .where(eq(crmAccounts.id, id))
+      .returning();
+    return updated;
+  }
+
+  async createContact(contact: InsertCrmContact): Promise<CrmContact> {
+    const account = await this.getAccountRow(contact.accountId);
+    if (!account) throw new Error("Account not found");
+    const [created] = await db.insert(crmContacts).values(contact).returning();
+    return created;
+  }
+
+  async updateContact(id: number, contact: Partial<InsertCrmContact>): Promise<CrmContact | undefined> {
+    const existing = await this.getContactRow(id);
+    if (!existing) return undefined;
+
+    const nextAccountId = contact.accountId ?? existing.accountId;
+    const account = await this.getAccountRow(nextAccountId);
+    if (!account) throw new Error("Account not found");
+
+    const [updated] = await db.update(crmContacts)
+      .set({ ...contact, updatedAt: new Date() })
+      .where(eq(crmContacts.id, id))
+      .returning();
+    return updated;
+  }
+
+  async createCampaign(campaign: InsertCrmCampaign): Promise<CrmCampaign> {
+    const account = await this.getAccountRow(campaign.accountId);
+    if (!account) throw new Error("Account not found");
+    const [created] = await db.insert(crmCampaigns).values(campaign).returning();
+    return created;
+  }
+
+  async updateCampaign(id: number, campaign: Partial<InsertCrmCampaign>): Promise<CrmCampaign | undefined> {
+    const existing = await this.getCampaignRow(id);
+    if (!existing) return undefined;
+
+    const nextAccountId = campaign.accountId ?? existing.accountId;
+    const account = await this.getAccountRow(nextAccountId);
+    if (!account) throw new Error("Account not found");
+
+    const [updated] = await db.update(crmCampaigns)
+      .set({ ...campaign, updatedAt: new Date() })
+      .where(eq(crmCampaigns.id, id))
+      .returning();
+    return updated;
+  }
+
+  async getExecutionsForCampaign(campaignId: number): Promise<ExecutionWithDetails[]> {
+    const rows = await db.select().from(executions)
+      .where(eq(executions.campaignId, campaignId))
+      .orderBy(desc(executions.executionDate), desc(executions.createdAt));
+    return Promise.all(rows.map((row) => this.enrichExecutionRow(row)));
+  }
+
+  async getExecutionsForAccount(accountId: number): Promise<ExecutionWithDetails[]> {
+    const rows = await db.select().from(executions)
+      .where(eq(executions.accountId, accountId))
+      .orderBy(desc(executions.executionDate), desc(executions.createdAt));
+    return Promise.all(rows.map((row) => this.enrichExecutionRow(row)));
+  }
+
+  async getAccount(id: number): Promise<AccountWithDetails | undefined> {
+    const account = await this.getAccountRow(id);
+    if (!account) return undefined;
+
+    const [summary, contacts, campaigns, linkedExecutions, activity] = await Promise.all([
+      this.enrichAccount(account),
+      this.getContactsByAccount(id),
+      this.getCampaignsByAccount(id),
+      this.getExecutionsForAccount(id),
+      this.getAccountActivity(id),
+    ]);
+
+    return {
+      ...summary,
+      contacts,
+      campaigns,
+      executions: linkedExecutions,
+      activity,
+    };
+  }
+
+  private async getAccountActivity(accountId: number): Promise<ExecutionActivityItem[]> {
+    const [contacts, campaigns, linkedExecutions] = await Promise.all([
+      this.getContactsByAccount(accountId),
+      this.getCampaignsByAccount(accountId),
+      this.getExecutionsForAccount(accountId),
+    ]);
+
+    const accountEvents: ExecutionActivityItem[] = [
+      ...contacts.map((contact) => ({
+        type: "contact_created",
+        timestamp: contact.createdAt,
+        actor: null,
+        title: `Contact added: ${contact.name}`,
+        description: contact.email || contact.jobTitle || null,
+        entityType: "contact",
+        entityId: contact.id,
+        href: `/accounts/${accountId}`,
+        executionId: null,
+      })),
+      ...campaigns.map((campaign) => ({
+        type: "campaign_created",
+        timestamp: campaign.createdAt,
+        actor: null,
+        title: `Campaign created: ${campaign.name}`,
+        description: campaign.status,
+        entityType: "campaign",
+        entityId: campaign.id,
+        href: `/campaigns/${campaign.id}`,
+        executionId: null,
+      })),
+    ];
+
+    const executionEvents = await Promise.all(linkedExecutions.map((execution) => this.getExecutionActivity(execution.id)));
+    return [...accountEvents, ...executionEvents.flat()]
+      .sort((a, b) => {
+        const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+        const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+        return bTime - aTime;
+      })
+      .slice(0, 40);
+  }
+
   async getExecutions(filters: any): Promise<{ executions: ExecutionWithDetails[]; total: number }> {
     const conditions: any[] = [];
 
@@ -227,25 +514,7 @@ export class DatabaseStorage implements IStorage {
       .orderBy(sortFn(sortCol))
       .limit(limit)
       .offset(offset);
-
-    const enriched: ExecutionWithDetails[] = await Promise.all(
-      rows.map(async (row) => {
-        const [country] = row.countryId ? await db.select().from(countries).where(eq(countries.id, row.countryId)) : [undefined];
-        const [brand] = row.brandId ? await db.select().from(brands).where(eq(brands.id, row.brandId)) : [undefined];
-        const [title] = row.titleId ? await db.select().from(titles).where(eq(titles.id, row.titleId)) : [undefined];
-        const [studio] = row.studioId ? await db.select().from(studios).where(eq(studios.id, row.studioId)) : [undefined];
-        const [owner] = row.ownerId ? await db.select({ id: users.id, displayName: users.displayName, username: users.username }).from(users).where(eq(users.id, row.ownerId)) : [undefined];
-
-        return {
-          ...row,
-          country: country || undefined,
-          brand: brand || undefined,
-          title: title || null,
-          studio: studio || null,
-          owner: owner || null,
-        };
-      })
-    );
+    const enriched = await Promise.all(rows.map((row) => this.enrichExecutionRow(row)));
 
     return { executions: enriched, total };
   }
@@ -253,17 +522,15 @@ export class DatabaseStorage implements IStorage {
   async getExecution(id: number): Promise<ExecutionWithDetails | undefined> {
     const [row] = await db.select().from(executions).where(eq(executions.id, id));
     if (!row) return undefined;
-
-    const [country] = row.countryId ? await db.select().from(countries).where(eq(countries.id, row.countryId)) : [undefined];
-    const [brand] = row.brandId ? await db.select().from(brands).where(eq(brands.id, row.brandId)) : [undefined];
-    const [title] = row.titleId ? await db.select().from(titles).where(eq(titles.id, row.titleId)) : [undefined];
-    const [studio] = row.studioId ? await db.select().from(studios).where(eq(studios.id, row.studioId)) : [undefined];
-    const [owner] = row.ownerId ? await db.select({ id: users.id, displayName: users.displayName, username: users.username }).from(users).where(eq(users.id, row.ownerId)) : [undefined];
-
-    return { ...row, country, brand, title, studio, owner };
+    return this.enrichExecutionRow(row);
   }
 
   async createExecution(e: InsertExecution): Promise<Execution> {
+    await this.validateExecutionCrmContext({
+      accountId: e.accountId,
+      campaignId: e.campaignId,
+      primaryContactId: e.primaryContactId,
+    });
     const [r] = await db.insert(executions).values(e).returning();
     await db.insert(statusHistory).values({
       executionId: r.id,
@@ -274,6 +541,16 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateExecution(id: number, e: Partial<InsertExecution>): Promise<Execution | undefined> {
+    const [existing] = await db.select().from(executions).where(eq(executions.id, id));
+    if (!existing) return undefined;
+
+    const nextValues = {
+      accountId: Object.prototype.hasOwnProperty.call(e, "accountId") ? e.accountId : existing.accountId,
+      campaignId: Object.prototype.hasOwnProperty.call(e, "campaignId") ? e.campaignId : existing.campaignId,
+      primaryContactId: Object.prototype.hasOwnProperty.call(e, "primaryContactId") ? e.primaryContactId : existing.primaryContactId,
+    };
+    await this.validateExecutionCrmContext(nextValues);
+
     const [r] = await db.update(executions)
       .set({ ...e, updatedAt: new Date() })
       .where(eq(executions.id, id))
@@ -314,6 +591,141 @@ export class DatabaseStorage implements IStorage {
       }
       return { ...row, changedByName };
     }));
+  }
+
+  async getExecutionActivity(executionId: number): Promise<ExecutionActivityItem[]> {
+    const [statusRows, taskRows, assetRows, conversation, threadLinks] = await Promise.all([
+      this.getStatusHistory(executionId),
+      db.select().from(tasks).where(eq(tasks.executionId, executionId)).orderBy(desc(tasks.createdAt)),
+      db.select().from(assets).where(eq(assets.executionId, executionId)).orderBy(desc(assets.uploadedAt)),
+      db.select().from(conversations).where(and(eq(conversations.executionId, executionId), eq(conversations.type, "execution"))).then((rows) => rows[0]),
+      db.select().from(emailLinks).where(eq(emailLinks.executionId, executionId)).orderBy(desc(emailLinks.createdAt)),
+    ]);
+
+    const activity: ExecutionActivityItem[] = [];
+
+    for (const row of statusRows) {
+      activity.push({
+        type: "status",
+        timestamp: row.changedAt,
+        actor: row.changedByName || "System",
+        title: `Status changed to ${row.status.replace(/_/g, " ")}`,
+        description: row.notes || null,
+        entityType: "status_history",
+        entityId: row.id,
+        executionId,
+      });
+    }
+
+    for (const task of taskRows) {
+      const creator = await this.getSafeUserById(task.createdBy);
+      activity.push({
+        type: "task_created",
+        timestamp: task.createdAt,
+        actor: creator?.displayName || null,
+        title: `Task created: ${task.title}`,
+        description: task.description || null,
+        entityType: "task",
+        entityId: task.id,
+        executionId,
+      });
+
+      if (task.updatedAt && task.createdAt && new Date(task.updatedAt).getTime() > new Date(task.createdAt).getTime()) {
+        const assignee = await this.getSafeUserById(task.assignedTo);
+        activity.push({
+          type: "task_updated",
+          timestamp: task.updatedAt,
+          actor: assignee?.displayName || creator?.displayName || null,
+          title: `Task updated: ${task.title}`,
+          description: `Current status: ${task.status.replace(/_/g, " ")}`,
+          entityType: "task",
+          entityId: task.id,
+          executionId,
+        });
+      }
+    }
+
+    for (const asset of assetRows) {
+      const uploader = await this.getSafeUserById(asset.uploadedBy);
+      activity.push({
+        type: "asset_added",
+        timestamp: asset.uploadedAt,
+        actor: uploader?.displayName || null,
+        title: "Asset added",
+        description: asset.description || asset.url || asset.assetType,
+        entityType: "asset",
+        entityId: asset.id,
+        executionId,
+      });
+    }
+
+    if (conversation) {
+      const chatMessages = await db.select().from(messages)
+        .where(eq(messages.conversationId, conversation.id))
+        .orderBy(desc(messages.createdAt));
+
+      for (const message of chatMessages) {
+        const sender = await this.getSafeUserById(message.senderId);
+        activity.push({
+          type: "chat_message",
+          timestamp: message.createdAt,
+          actor: sender?.displayName || null,
+          title: "Chat message",
+          description: message.body,
+          entityType: "message",
+          entityId: message.id,
+          href: `/chat/${conversation.id}`,
+          executionId,
+        });
+      }
+    }
+
+    for (const link of threadLinks) {
+      const [thread] = await db.select().from(emailThreads).where(eq(emailThreads.id, link.threadId));
+      const linkedBy = await this.getSafeUserById(link.linkedBy);
+      if (thread) {
+        activity.push({
+          type: "email_linked",
+          timestamp: link.createdAt,
+          actor: linkedBy?.displayName || null,
+          title: "Email thread linked",
+          description: thread.subject || "No subject",
+          entityType: "email_thread",
+          entityId: thread.id,
+          href: `/email?threadId=${thread.id}`,
+          executionId,
+        });
+
+        const threadMessages = await db.select().from(emailMessages)
+          .where(eq(emailMessages.threadId, thread.id))
+          .orderBy(desc(emailMessages.sentAt), desc(emailMessages.createdAt));
+
+        for (const message of threadMessages) {
+          let actor = message.senderName || message.senderEmail || null;
+          if (message.direction === "outbound") {
+            const [account] = await db.select().from(emailAccounts).where(eq(emailAccounts.id, message.accountId));
+            actor = account?.displayName || account?.emailAddress || actor;
+          }
+          activity.push({
+            type: "email_message",
+            timestamp: message.sentAt || message.createdAt,
+            actor,
+            title: message.direction === "outbound" ? "Email sent" : "Email received",
+            description: message.subject || message.snippet || message.bodyText || null,
+            entityType: "email_message",
+            entityId: message.id,
+            href: `/email?threadId=${thread.id}`,
+            executionId,
+          });
+        }
+      }
+    }
+
+    return activity.sort((a, b) => {
+      const aTime = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      const bTime = b.timestamp ? new Date(b.timestamp).getTime() : 0;
+      return bTime - aTime;
+    });
   }
 
   async getDashboardStats(filters: any): Promise<any> {
@@ -425,12 +837,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createTask(t: InsertTask): Promise<Task> {
-    const [r] = await db.insert(tasks).values(t).returning();
+    const [r] = await db.insert(tasks).values({ ...t, updatedAt: new Date() }).returning();
     return r;
   }
 
   async updateTask(id: number, t: Partial<InsertTask>): Promise<Task | undefined> {
-    const [r] = await db.update(tasks).set(t).where(eq(tasks.id, id)).returning();
+    const [r] = await db.update(tasks).set({ ...t, updatedAt: new Date() }).where(eq(tasks.id, id)).returning();
     return r;
   }
 
@@ -889,15 +1301,35 @@ export class DatabaseStorage implements IStorage {
     const allUsers = await db.select().from(users);
     const editor = allUsers.find(u => u.username === "editor");
 
+    const [cinemarkAccount, claroAccount, netflixAccount] = await db.insert(crmAccounts).values([
+      { name: "Cinemark Central America", description: "Regional cinema exhibitor and launch partner.", ownerId: editor?.id },
+      { name: "Claro Media Partnerships", description: "Commercial and media partner for co-branded executions.", ownerId: editor?.id },
+      { name: "Netflix Regional Marketing", description: "Regional marketing account for platform activations.", ownerId: editor?.id },
+    ]).returning();
+
+    const [cinemarkContact, claroContact, netflixContact] = await db.insert(crmContacts).values([
+      { accountId: cinemarkAccount.id, name: "Lucia Perez", email: "lucia.perez@cinemark.example", jobTitle: "Marketing Director", phone: "+502 5555-1000" },
+      { accountId: claroAccount.id, name: "Andres Molina", email: "andres.molina@claro.example", jobTitle: "Brand Partnerships Lead", phone: "+503 5555-2000" },
+      { accountId: netflixAccount.id, name: "Daniela Ruiz", email: "daniela.ruiz@netflix.example", jobTitle: "Regional Campaign Manager", phone: "+507 5555-3000" },
+    ]).returning();
+
+    const [cinemarkCampaign, claroCampaign, netflixCampaign] = await db.insert(crmCampaigns).values([
+      { accountId: cinemarkAccount.id, name: "Avatar Regional Launch", status: "active", startDate: "2025-10-01", endDate: "2025-12-31", description: "Regional cinema rollout and premiere support." },
+      { accountId: claroAccount.id, name: "Spider-Verse Telco Bundle", status: "completed", startDate: "2025-11-01", endDate: "2025-12-15", description: "Claro partnership for social and trade amplification." },
+      { accountId: netflixAccount.id, name: "Super Mario Co-Promo", status: "planning", startDate: "2026-01-15", endDate: "2026-03-15", description: "Cross-promotion and partner media plan." },
+    ]).returning();
+
     const executionSeeds = [
       {
         countryId: allCountries[0].id, brandId: allBrands[0].id, titleId: allTitles[0].id, studioId: allStudios[2].id,
+        accountId: cinemarkAccount.id, campaignId: cinemarkCampaign.id, primaryContactId: cinemarkContact.id,
         executionDate: "2025-11-15", executionType: "publicity" as const, mediaValueLocal: "125000", localCurrency: "GTQ" as const,
         fxRateUsed: "7.75", mediaValueUsd: "16129.03", status: "executed" as const, ownerId: editor?.id,
         hasClipping: true, hasPhotos: true, notes: "Major cinema campaign launch in Guatemala City", createdBy: editor?.id,
       },
       {
         countryId: allCountries[1].id, brandId: allBrands[2].id, titleId: allTitles[1].id, studioId: allStudios[3].id,
+        accountId: claroAccount.id, campaignId: claroCampaign.id, primaryContactId: claroContact.id,
         executionDate: "2025-12-01", executionType: "canje" as const, mediaValueLocal: "8500", localCurrency: "USD" as const,
         fxRateUsed: "1", mediaValueUsd: "8500", status: "closed" as const, ownerId: editor?.id,
         hasClipping: true, hasPhotos: true, hasLinks: true, notes: "Social media trade deal with Claro for Spider-Verse", createdBy: editor?.id,
@@ -916,6 +1348,7 @@ export class DatabaseStorage implements IStorage {
       },
       {
         countryId: allCountries[5].id, brandId: allBrands[6].id, titleId: allTitles[4].id, studioId: allStudios[0].id,
+        accountId: netflixAccount.id, campaignId: netflixCampaign.id, primaryContactId: netflixContact.id,
         executionDate: "2026-02-01", executionType: "publicity" as const, mediaValueLocal: "15000", localCurrency: "USD" as const,
         fxRateUsed: "1", mediaValueUsd: "15000", status: "draft" as const, ownerId: editor?.id,
         notes: "Netflix cross-promotion with Super Mario Bros", createdBy: editor?.id,

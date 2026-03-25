@@ -11,6 +11,9 @@ export const executionTypeValues = ["canje", "publicity", "third_party"] as cons
 export const currencyValues = ["GTQ", "USD", "HNL", "NIO", "CRC", "PAB", "BZD", "SVC"] as const;
 export const assetTypeValues = ["photo", "video", "clipping", "post", "contract", "other"] as const;
 export const taskStatusValues = ["pending", "in_progress", "completed", "cancelled"] as const;
+export const crmCampaignStatusValues = ["planning", "active", "completed", "on_hold"] as const;
+export const automationSeverityValues = ["low", "medium", "high"] as const;
+export const automationAlertStatusValues = ["open", "resolved"] as const;
 export const emailProviderValues = ["google", "microsoft"] as const;
 export const emailAccountStatusValues = ["connected", "needs_reconnect", "disconnected", "error"] as const;
 export const emailThreadVisibilityValues = ["private", "shared"] as const;
@@ -47,12 +50,49 @@ export const studios = sqliteTable("studios", {
   name: text("name").notNull().unique(),
 });
 
+export const crmAccounts = sqliteTable("crm_accounts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull().unique(),
+  description: text("description"),
+  ownerId: integer("owner_id").references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).defaultNow(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).defaultNow(),
+});
+
+export const crmContacts = sqliteTable("crm_contacts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  accountId: integer("account_id").notNull().references(() => crmAccounts.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  email: text("email"),
+  jobTitle: text("job_title"),
+  phone: text("phone"),
+  notes: text("notes"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).defaultNow(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).defaultNow(),
+});
+
+export const crmCampaigns = sqliteTable("crm_campaigns", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  accountId: integer("account_id").notNull().references(() => crmAccounts.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  description: text("description"),
+  status: text("status", { enum: crmCampaignStatusValues }).notNull().default("planning"),
+  startDate: text("start_date"),
+  endDate: text("end_date"),
+  progressOverride: integer("progress_override"),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).defaultNow(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).defaultNow(),
+});
+
 export const executions = sqliteTable("executions", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   countryId: integer("country_id").notNull().references(() => countries.id),
   brandId: integer("brand_id").notNull().references(() => brands.id),
   titleId: integer("title_id").references(() => titles.id),
   studioId: integer("studio_id").references(() => studios.id),
+  accountId: integer("account_id").references(() => crmAccounts.id),
+  campaignId: integer("campaign_id").references(() => crmCampaigns.id),
+  primaryContactId: integer("primary_contact_id").references(() => crmContacts.id),
   executionDate: text("execution_date").notNull(),
   executionType: text("execution_type", { enum: executionTypeValues }).notNull(),
   mediaValueLocal: text("media_value_local").notNull(),
@@ -65,6 +105,9 @@ export const executions = sqliteTable("executions", {
   ownerId: integer("owner_id").references(() => users.id),
   status: text("status", { enum: executionStatusValues }).notNull().default("draft"),
   dueDate: text("due_date"),
+  plannedStartDate: text("planned_start_date"),
+  plannedEndDate: text("planned_end_date"),
+  progressOverride: integer("progress_override"),
   hasClipping: integer("has_clipping", { mode: "boolean" }).default(false),
   hasPhotos: integer("has_photos", { mode: "boolean" }).default(false),
   hasLinks: integer("has_links", { mode: "boolean" }).default(false),
@@ -113,7 +156,11 @@ export const tasks = sqliteTable("tasks", {
   assignedTo: integer("assigned_to").references(() => users.id),
   createdBy: integer("created_by").references(() => users.id),
   dueDate: text("due_date"),
+  startDate: text("start_date"),
+  endDate: text("end_date"),
+  progressOverride: integer("progress_override"),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).defaultNow(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).defaultNow(),
 });
 
 export const notifications = sqliteTable("notifications", {
@@ -252,11 +299,49 @@ export const emailSyncCursors = sqliteTable("email_sync_cursors", {
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).defaultNow(),
 });
 
+export const automationAlerts = sqliteTable("automation_alerts", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ruleCode: text("rule_code").notNull(),
+  entityType: text("entity_type").notNull(),
+  entityId: integer("entity_id").notNull(),
+  executionId: integer("execution_id").references(() => executions.id, { onDelete: "cascade" }),
+  taskId: integer("task_id").references(() => tasks.id, { onDelete: "cascade" }),
+  campaignId: integer("campaign_id").references(() => crmCampaigns.id, { onDelete: "cascade" }),
+  severity: text("severity", { enum: automationSeverityValues }).notNull().default("medium"),
+  title: text("title").notNull(),
+  description: text("description"),
+  suggestedAction: text("suggested_action"),
+  status: text("status", { enum: automationAlertStatusValues }).notNull().default("open"),
+  dedupeKey: text("dedupe_key").notNull().unique(),
+  payload: text("payload", { mode: "json" }),
+  firstTriggeredAt: integer("first_triggered_at", { mode: "timestamp_ms" }).defaultNow(),
+  lastTriggeredAt: integer("last_triggered_at", { mode: "timestamp_ms" }).defaultNow(),
+  lastNotifiedAt: integer("last_notified_at", { mode: "timestamp_ms" }),
+  resolvedAt: integer("resolved_at", { mode: "timestamp_ms" }),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).defaultNow(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).defaultNow(),
+});
+
 export const insertUserSchema = createInsertSchema(users).omit({ id: true });
 export const insertCountrySchema = createInsertSchema(countries).omit({ id: true });
 export const insertBrandSchema = createInsertSchema(brands).omit({ id: true });
 export const insertTitleSchema = createInsertSchema(titles).omit({ id: true });
 export const insertStudioSchema = createInsertSchema(studios).omit({ id: true });
+export const insertCrmAccountSchema = createInsertSchema(crmAccounts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertCrmContactSchema = createInsertSchema(crmContacts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export const insertCrmCampaignSchema = createInsertSchema(crmCampaigns).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
 export const insertExecutionSchema = createInsertSchema(executions).omit({
   id: true,
   createdAt: true,
@@ -265,7 +350,7 @@ export const insertExecutionSchema = createInsertSchema(executions).omit({
 export const insertAssetSchema = createInsertSchema(assets).omit({ id: true, uploadedAt: true });
 export const insertStatusHistorySchema = createInsertSchema(statusHistory).omit({ id: true, changedAt: true });
 export const insertFxDefaultSchema = createInsertSchema(fxDefaults).omit({ id: true });
-export const insertTaskSchema = createInsertSchema(tasks).omit({ id: true, createdAt: true });
+export const insertTaskSchema = createInsertSchema(tasks).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertNotificationSchema = createInsertSchema(notifications).omit({ id: true, createdAt: true, readAt: true });
 export const insertConversationSchema = createInsertSchema(conversations).omit({ id: true, createdAt: true });
 export const insertMessageSchema = createInsertSchema(messages).omit({ id: true, createdAt: true });
@@ -291,6 +376,15 @@ export const insertEmailSyncCursorSchema = createInsertSchema(emailSyncCursors).
   id: true,
   updatedAt: true,
 });
+export const insertAutomationAlertSchema = createInsertSchema(automationAlerts).omit({
+  id: true,
+  firstTriggeredAt: true,
+  lastTriggeredAt: true,
+  lastNotifiedAt: true,
+  resolvedAt: true,
+  createdAt: true,
+  updatedAt: true,
+});
 
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
@@ -302,6 +396,12 @@ export type Title = typeof titles.$inferSelect;
 export type InsertTitle = z.infer<typeof insertTitleSchema>;
 export type Studio = typeof studios.$inferSelect;
 export type InsertStudio = z.infer<typeof insertStudioSchema>;
+export type CrmAccount = typeof crmAccounts.$inferSelect;
+export type InsertCrmAccount = z.infer<typeof insertCrmAccountSchema>;
+export type CrmContact = typeof crmContacts.$inferSelect;
+export type InsertCrmContact = z.infer<typeof insertCrmContactSchema>;
+export type CrmCampaign = typeof crmCampaigns.$inferSelect;
+export type InsertCrmCampaign = z.infer<typeof insertCrmCampaignSchema>;
 export type Execution = typeof executions.$inferSelect;
 export type InsertExecution = z.infer<typeof insertExecutionSchema>;
 export type Asset = typeof assets.$inferSelect;
@@ -333,6 +433,8 @@ export type EmailLink = typeof emailLinks.$inferSelect;
 export type InsertEmailLink = z.infer<typeof insertEmailLinkSchema>;
 export type EmailSyncCursor = typeof emailSyncCursors.$inferSelect;
 export type InsertEmailSyncCursor = z.infer<typeof insertEmailSyncCursorSchema>;
+export type AutomationAlert = typeof automationAlerts.$inferSelect;
+export type InsertAutomationAlert = z.infer<typeof insertAutomationAlertSchema>;
 
 export type TaskWithAssignee = Task & {
   assignee?: Pick<User, "id" | "displayName" | "username"> | null;
@@ -396,6 +498,82 @@ export type EmailSyncStatus = {
   error?: string | null;
 };
 
+export type AutomationSeverity = (typeof automationSeverityValues)[number];
+export type AutomationAlertStatus = (typeof automationAlertStatusValues)[number];
+
+export type ExecutionActivityItem = {
+  type: string;
+  timestamp: Date | null;
+  actor?: string | null;
+  title: string;
+  description?: string | null;
+  entityType: string;
+  entityId: number;
+  href?: string | null;
+  executionId?: number | null;
+};
+
+export type AutomationAlertWithContext = AutomationAlert & {
+  execution?: Pick<Execution, "id" | "status" | "dueDate"> & {
+    brandName?: string | null;
+    titleName?: string | null;
+  } | null;
+  task?: Pick<Task, "id" | "title" | "status" | "dueDate"> | null;
+  campaign?: Pick<CrmCampaign, "id" | "name" | "status" | "startDate" | "endDate"> | null;
+};
+
+export type GanttTaskBar = TaskWithAssignee & {
+  rangeStart: string | null;
+  rangeEnd: string | null;
+  progress: number;
+  isDerivedSchedule?: boolean;
+  isDerivedProgress?: boolean;
+};
+
+export type ExecutionGanttItem = {
+  execution: ExecutionWithDetails;
+  progress: number;
+  rangeStart: string | null;
+  rangeEnd: string | null;
+  tasks: GanttTaskBar[];
+  activeTaskCount: number;
+  completedTaskCount: number;
+};
+
+export type CampaignWithDetails = CrmCampaign & {
+  account?: CrmAccountWithSummary | null;
+  executions?: ExecutionWithDetails[];
+  progress?: number;
+  openAlertCount?: number;
+};
+
+export type CampaignGanttExecutionItem = ExecutionWithDetails & {
+  rangeStart: string | null;
+  rangeEnd: string | null;
+  progress: number;
+  openAlertCount?: number;
+  atRisk?: boolean;
+};
+
+export type CampaignGanttItem = {
+  campaign: CampaignWithDetails;
+  progress: number;
+  rangeStart: string | null;
+  rangeEnd: string | null;
+  executions: CampaignGanttExecutionItem[];
+  alerts: AutomationAlertWithContext[];
+};
+
+export type OperationalRiskSummary = {
+  openAlertCount: number;
+  highSeverityCount: number;
+  overdueTaskCount: number;
+  overdueExecutionCount: number;
+  pendingReplyCount: number;
+  alertsByRule: { ruleCode: string; count: number }[];
+  topAlerts: AutomationAlertWithContext[];
+};
+
 export const loginSchema = z.object({
   username: z.string().min(1, "Username is required"),
   password: z.string().min(1, "Password is required"),
@@ -409,7 +587,24 @@ export type ExecutionWithDetails = Execution & {
   title?: Title | null;
   studio?: Studio | null;
   owner?: Pick<User, "id" | "displayName" | "username"> | null;
+  account?: CrmAccountWithSummary | null;
+  campaign?: CrmCampaign | null;
+  primaryContact?: CrmContact | null;
   assetCount?: number;
+};
+
+export type CrmAccountWithSummary = CrmAccount & {
+  owner?: Pick<User, "id" | "displayName" | "username"> | null;
+  contactCount?: number;
+  campaignCount?: number;
+  executionCount?: number;
+};
+
+export type AccountWithDetails = CrmAccountWithSummary & {
+  contacts?: CrmContact[];
+  campaigns?: CrmCampaign[];
+  executions?: ExecutionWithDetails[];
+  activity?: ExecutionActivityItem[];
 };
 
 export const STATUS_LABELS: Record<string, string> = {

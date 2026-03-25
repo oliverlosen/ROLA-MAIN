@@ -24,6 +24,9 @@ import AdminUsersPage from "@/pages/admin-users";
 import NotificationsPage from "@/pages/notifications";
 import ChatPage from "@/pages/chat";
 import EmailPage from "@/pages/email";
+import AccountsPage from "@/pages/accounts";
+import AccountDetailPage from "@/pages/account-detail";
+import CampaignDetailPage from "@/pages/campaign-detail";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -48,6 +51,9 @@ function Router() {
       </Route>
       <Route path="/admin/users" component={AdminUsersPage} />
       <Route path="/notifications" component={NotificationsPage} />
+      <Route path="/accounts" component={AccountsPage} />
+      <Route path="/accounts/:id" component={AccountDetailPage} />
+      <Route path="/campaigns/:id" component={CampaignDetailPage} />
       <Route path="/email" component={EmailPage} />
       <Route path="/chat/:conversationId" component={ChatPage} />
       <Route path="/chat" component={ChatPage} />

@@ -7,6 +7,7 @@ import { Strategy as LocalStrategy } from "passport-local";
 import bcrypt from "bcryptjs";
 import { storage } from "./storage";
 import { emailService } from "./email";
+import { automationService } from "./automation";
 import { emailProviderValues } from "@shared/schema";
 
 const MemoryStore = createMemoryStore(session);
@@ -126,6 +127,8 @@ export async function registerRoutes(
     console.error("Conv init error:", err);
   }
 
+  automationService.startScheduler();
+
   // === AUTH ROUTES ===
   app.post("/api/auth/login", (req, res, next) => {
     passport.authenticate("local", (err: any, user: any) => {
@@ -206,6 +209,100 @@ export async function registerRoutes(
     res.json({ ok: true });
   });
 
+  // === CRM ACCOUNTS ===
+  app.get("/api/accounts", requireAuth, async (_req, res) => {
+    res.json(await storage.getAccounts());
+  });
+
+  app.post("/api/accounts", requireRole("admin", "editor"), async (req, res) => {
+    try {
+      const user = req.user as any;
+      const account = await storage.createAccount({
+        ...req.body,
+        ownerId: req.body.ownerId || user.id,
+      });
+      res.json(account);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/accounts/:id", requireAuth, async (req, res) => {
+    const account = await storage.getAccount(Number(req.params.id));
+    if (!account) return res.status(404).json({ message: "Not found" });
+    res.json(account);
+  });
+
+  app.patch("/api/accounts/:id", requireRole("admin", "editor"), async (req, res) => {
+    try {
+      const updated = await storage.updateAccount(Number(req.params.id), req.body);
+      if (!updated) return res.status(404).json({ message: "Not found" });
+      res.json(updated);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/accounts/:id/contacts", requireAuth, async (req, res) => {
+    res.json(await storage.getContactsByAccount(Number(req.params.id)));
+  });
+
+  app.post("/api/accounts/:id/contacts", requireRole("admin", "editor"), async (req, res) => {
+    try {
+      const contact = await storage.createContact({
+        ...req.body,
+        accountId: Number(req.params.id),
+      });
+      res.json(contact);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.patch("/api/contacts/:id", requireRole("admin", "editor"), async (req, res) => {
+    try {
+      const updated = await storage.updateContact(Number(req.params.id), req.body);
+      if (!updated) return res.status(404).json({ message: "Not found" });
+      res.json(updated);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/accounts/:id/campaigns", requireAuth, async (req, res) => {
+    res.json(await storage.getCampaignsByAccount(Number(req.params.id)));
+  });
+
+  app.post("/api/accounts/:id/campaigns", requireRole("admin", "editor"), async (req, res) => {
+    try {
+      const campaign = await storage.createCampaign({
+        ...req.body,
+        accountId: Number(req.params.id),
+      });
+      await automationService.evaluateCampaign(campaign.id);
+      res.json(campaign);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
+  app.get("/api/campaigns/:id", requireAuth, async (req, res) => {
+    const campaign = await automationService.getCampaignDetails(Number(req.params.id));
+    if (!campaign) return res.status(404).json({ message: "Not found" });
+    res.json(campaign);
+  });
+
+  app.patch("/api/campaigns/:id", requireRole("admin", "editor"), async (req, res) => {
+    try {
+      const updated = await storage.updateCampaign(Number(req.params.id), req.body);
+      if (!updated) return res.status(404).json({ message: "Not found" });
+      await automationService.evaluateCampaign(updated.id);
+      res.json(updated);
+    } catch (err: any) {
+      res.status(400).json({ message: err.message });
+    }
+  });
+
   // === USERS ===
   app.get("/api/users", requireAuth, async (_req, res) => {
     res.json(await storage.getUsers());
@@ -267,6 +364,10 @@ export async function registerRoutes(
   app.post("/api/executions", requireRole("admin", "editor"), async (req, res) => {
     try {
       const exec = await storage.createExecution(req.body);
+      await automationService.evaluateExecution(exec.id);
+      if (exec.campaignId) {
+        await automationService.evaluateCampaign(exec.campaignId);
+      }
       res.json(exec);
     } catch (err: any) {
       res.status(400).json({ message: err.message });
@@ -274,8 +375,17 @@ export async function registerRoutes(
   });
 
   app.patch("/api/executions/:id", requireRole("admin", "editor"), async (req, res) => {
-    const exec = await storage.updateExecution(Number(req.params.id), req.body);
+    const executionId = Number(req.params.id);
+    const previous = await storage.getExecution(executionId);
+    const exec = await storage.updateExecution(executionId, req.body);
     if (!exec) return res.status(404).json({ message: "Not found" });
+    await automationService.evaluateExecution(exec.id);
+    if (previous?.campaignId && previous.campaignId !== exec.campaignId) {
+      await automationService.evaluateCampaign(previous.campaignId);
+    }
+    if (exec.campaignId) {
+      await automationService.evaluateCampaign(exec.campaignId);
+    }
     res.json(exec);
   });
 
@@ -310,6 +420,7 @@ export async function registerRoutes(
       }
     }
 
+    await automationService.evaluateExecution(executionId);
     res.json({ ok: true });
   });
 
@@ -320,6 +431,7 @@ export async function registerRoutes(
 
   app.post("/api/executions/:id/assets", requireRole("admin", "editor"), async (req, res) => {
     const asset = await storage.createAsset({ ...req.body, executionId: Number(req.params.id) });
+    await automationService.evaluateExecution(Number(req.params.id));
     res.json(asset);
   });
 
@@ -328,10 +440,36 @@ export async function registerRoutes(
     res.json(await storage.getStatusHistory(Number(req.params.id)));
   });
 
+  app.get("/api/executions/:id/activity", requireAuth, async (req, res) => {
+    res.json(await storage.getExecutionActivity(Number(req.params.id)));
+  });
+
+  app.get("/api/executions/:id/alerts", requireAuth, async (req, res) => {
+    res.json(await automationService.listAlertsForExecution(Number(req.params.id)));
+  });
+
+  app.get("/api/executions/:id/gantt", requireAuth, async (req, res) => {
+    const gantt = await automationService.getExecutionGantt(Number(req.params.id));
+    if (!gantt) return res.status(404).json({ message: "Not found" });
+    res.json(gantt);
+  });
+
   // === DASHBOARD ===
   app.get("/api/dashboard", requireAuth, async (req, res) => {
     const filters = parseFilters(req.query);
     res.json(await storage.getDashboardStats(filters));
+  });
+
+  app.get("/api/dashboard/operational-risk", requireAuth, async (_req, res) => {
+    res.json(await automationService.getOperationalRiskSummary());
+  });
+
+  app.post("/api/automation/run", requireRole("admin"), async (_req, res) => {
+    const result = await automationService.runSweep({ forceNotify: false });
+    res.json({
+      result,
+      summary: await automationService.getOperationalRiskSummary(),
+    });
   });
 
   // === TASKS ===
@@ -364,6 +502,7 @@ export async function registerRoutes(
       });
     }
 
+    await automationService.evaluateTask(task.id);
     res.json(task);
   });
 
@@ -408,6 +547,7 @@ export async function registerRoutes(
       }
     }
 
+    await automationService.evaluateTask(taskId);
     res.json(updated);
   });
 
@@ -646,6 +786,7 @@ export async function registerRoutes(
     try {
       const user = req.user as any;
       const result = await emailService.syncAccount(Number(req.params.id), user.id, getBaseUrl(req));
+      await automationService.refreshEmailPendingReplyAlerts();
       res.json(result);
     } catch (err: any) {
       res.status(400).json({ message: err.message });
@@ -657,6 +798,7 @@ export async function registerRoutes(
     if (result.validationToken) {
       return res.type("text/plain").send(result.validationToken);
     }
+    await automationService.refreshEmailPendingReplyAlerts();
     res.json({ ok: true, syncedAccounts: result.syncedAccounts });
   });
 
@@ -665,6 +807,7 @@ export async function registerRoutes(
     if (result.validationToken) {
       return res.type("text/plain").send(result.validationToken);
     }
+    await automationService.refreshEmailPendingReplyAlerts();
     res.json({ ok: true, syncedAccounts: result.syncedAccounts });
   });
 
@@ -687,6 +830,7 @@ export async function registerRoutes(
     try {
       const user = req.user as any;
       const thread = await emailService.sendMessage(user.id, req.body, getBaseUrl(req));
+      await automationService.evaluateThread(thread.id);
       res.json(thread);
     } catch (err: any) {
       res.status(400).json({ message: err.message });
@@ -697,6 +841,7 @@ export async function registerRoutes(
     try {
       const user = req.user as any;
       const thread = await emailService.replyToThread(user.id, Number(req.params.id), req.body.body || "", getBaseUrl(req));
+      await automationService.evaluateThread(thread.id);
       res.json(thread);
     } catch (err: any) {
       res.status(400).json({ message: err.message });
@@ -712,10 +857,17 @@ export async function registerRoutes(
         Number(req.body.executionId),
         req.body.taskId ? Number(req.body.taskId) : undefined,
       );
+      await automationService.evaluateThread(thread.id);
       res.json(thread);
     } catch (err: any) {
       res.status(400).json({ message: err.message });
     }
+  });
+
+  app.get("/api/campaigns/:id/gantt", requireAuth, async (req, res) => {
+    const gantt = await automationService.getCampaignGantt(Number(req.params.id));
+    if (!gantt) return res.status(404).json({ message: "Not found" });
+    res.json(gantt);
   });
 
   return httpServer;

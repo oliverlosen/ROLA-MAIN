@@ -22,7 +22,7 @@ function buildNotificationText(
   notification: NotificationWithActor,
   t: (key: string) => string,
 ): string {
-  const actorName = notification.actor?.displayName || "Someone";
+  const actorName = notification.actor?.displayName || "System";
   const payload = notification.payload as any;
   const taskTitle = payload?.taskTitle || "";
   const executionName = payload?.executionName || "";
@@ -49,6 +49,12 @@ function buildNotificationText(
       const senderName = payload?.senderName || "External sender";
       const subject = payload?.subject || "";
       return `${senderName} ${t("notifications.repliedToEmail")} "${subject}"`;
+    }
+
+    case "automation_alert": {
+      const title = payload?.title || t("automation.alerts");
+      const severity = payload?.severity ? t(`automation.severity.${payload.severity}`) : "";
+      return severity ? `${title} (${severity})` : title;
     }
 
     default:
@@ -99,6 +105,17 @@ export default function NotificationsPage() {
     if (notification.type === "email_reply" && payload?.threadId) {
       navigate(`/email?threadId=${payload.threadId}`);
       return;
+    }
+
+    if (notification.type === "automation_alert") {
+      if (payload?.threadId) {
+        navigate(`/email?threadId=${payload.threadId}`);
+        return;
+      }
+      if (payload?.campaignId && !notification.executionId) {
+        navigate(`/campaigns/${payload.campaignId}`);
+        return;
+      }
     }
 
     if (notification.executionId) {
