@@ -175,6 +175,47 @@
   }
 }
 
+@keyframes rolaLogoZoomIn {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  70% {
+    transform: scale(2.2);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(2.9);
+    opacity: 0;
+  }
+}
+
+.rola-login-transition-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: hsl(var(--background));
+  pointer-events: all;
+}
+
+.rola-login-transition-logo {
+  width: 8rem;
+  height: 8rem;
+  border-radius: 0.5rem;
+  object-fit: cover;
+  animation: rolaLogoZoomIn 900ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  will-change: transform, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rola-login-transition-logo {
+    animation-duration: 200ms;
+  }
+}
+
 /**
  * Using the elevate system.
  * Automatic contrast adjustment.

@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -67,6 +68,29 @@ function Router() {
 function AuthenticatedApp() {
   const { user, isLoading } = useAuth();
   const { t } = useLanguage();
+  const [isEnteringApp, setIsEnteringApp] = useState(false);
+  const hasResolvedUnauthenticatedState = useRef(false);
+  const hasAnimatedCurrentSession = useRef(false);
+
+  useEffect(() => {
+    if (isLoading) return;
+
+    if (!user) {
+      hasResolvedUnauthenticatedState.current = true;
+      hasAnimatedCurrentSession.current = false;
+      setIsEnteringApp(false);
+      return;
+    }
+
+    if (hasResolvedUnauthenticatedState.current && !hasAnimatedCurrentSession.current) {
+      hasAnimatedCurrentSession.current = true;
+      setIsEnteringApp(true);
+      const timer = window.setTimeout(() => setIsEnteringApp(false), 900);
+      return () => window.clearTimeout(timer);
+    }
+
+    hasAnimatedCurrentSession.current = true;
+  }, [isLoading, user]);
 
   if (isLoading) {
     return (
@@ -81,6 +105,19 @@ function AuthenticatedApp() {
 
   if (!user) {
     return <LoginPage />;
+  }
+
+  if (isEnteringApp) {
+    return (
+      <div className="rola-login-transition-overlay" data-testid="login-transition-overlay">
+        <img
+          src={rolaLogo}
+          alt="Rola Logo"
+          className="rola-login-transition-logo"
+          data-testid="img-login-transition-logo"
+        />
+      </div>
+    );
   }
 
   const style = {
