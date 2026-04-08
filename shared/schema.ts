@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+import { notificationTypeValues } from "./notifications";
 
 export const roleValues = ["admin", "editor", "approver", "viewer"] as const;
 export const executionStatusValues = [
@@ -170,7 +171,7 @@ export const notifications = sqliteTable("notifications", {
   executionId: integer("execution_id").references(() => executions.id, { onDelete: "cascade" }),
   entityType: text("entity_type").notNull(),
   entityId: integer("entity_id").notNull(),
-  type: text("type").notNull(),
+  type: text("type", { enum: notificationTypeValues }).notNull(),
   payload: text("payload", { mode: "json" }),
   readAt: integer("read_at", { mode: "timestamp_ms" }),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).defaultNow(),

@@ -8,7 +8,9 @@ import bcrypt from "bcryptjs";
 import { storage } from "./storage";
 import { emailService } from "./email";
 import { automationService } from "./automation";
+import { notificationCenter } from "./notification-center";
 import { emailProviderValues } from "@shared/schema";
+import { isNotificationCategory, type NotificationCategory } from "@shared/notifications";
 
 const MemoryStore = createMemoryStore(session);
 
@@ -57,6 +59,18 @@ function parseEmailProvider(provider: string | string[]) {
   throw new Error("Unsupported email provider");
 }
 
+function parseNotificationCategory(value: unknown): NotificationCategory {
+  const normalized = Array.isArray(value) ? value[0] : value;
+  return isNotificationCategory(normalized) ? normalized : "all";
+}
+
+function parseOptionalId(value: unknown): number | undefined {
+  const normalized = Array.isArray(value) ? value[0] : value;
+  if (normalized === undefined || normalized === null || normalized === "") return undefined;
+  const parsed = Number(normalized);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 function sendApiError(
   res: Response,
   status: number,
@@ -73,10 +87,24 @@ export async function registerRoutes(
 ): Promise<Server> {
   const handleDeleteAccount = async (req: Request, res: Response) => {
     try {
+      const user = req.user as any;
       const accountId = Number(req.params.id);
       const existing = await storage.getAccount(accountId);
       if (!existing) return res.status(404).json({ message: "Not found" });
+      const recipientIds = await notificationCenter.getAccountRelatedUserIds(accountId);
       await storage.deleteAccount(accountId);
+      await notificationCenter.sendNotification({
+        recipientIds,
+        actorId: user.id,
+        executionId: null,
+        entityType: "account",
+        entityId: accountId,
+        type: "account_deleted",
+        payload: {
+          accountId,
+          accountName: existing.name,
+        },
+      });
       return res.json({ ok: true });
     } catch (err: any) {
       return res.status(400).json({ message: err.message });
@@ -233,6 +261,18 @@ export async function registerRoutes(
         ...req.body,
         ownerId: req.body.ownerId || user.id,
       });
+      await notificationCenter.sendNotification({
+        recipientIds: await notificationCenter.getAccountRelatedUserIds(account.id),
+        actorId: user.id,
+        executionId: null,
+        entityType: "account",
+        entityId: account.id,
+        type: "account_created",
+        payload: {
+          accountId: account.id,
+          accountName: account.name,
+        },
+      });
       res.json(account);
     } catch (err: any) {
       res.status(400).json({ message: err.message });
@@ -247,8 +287,29 @@ export async function registerRoutes(
 
   app.patch("/api/accounts/:id", requireRole("admin", "editor"), async (req, res) => {
     try {
-      const updated = await storage.updateAccount(Number(req.params.id), req.body);
+      const user = req.user as any;
+      const accountId = Number(req.params.id);
+      const existing = await storage.getAccount(accountId);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      const previousRecipientIds = await notificationCenter.getAccountRelatedUserIds(accountId);
+      const updated = await storage.updateAccount(accountId, req.body);
       if (!updated) return res.status(404).json({ message: "Not found" });
+      const recipientIds = Array.from(new Set([
+        ...previousRecipientIds,
+        ...(await notificationCenter.getAccountRelatedUserIds(updated.id)),
+      ]));
+      await notificationCenter.sendNotification({
+        recipientIds,
+        actorId: user.id,
+        executionId: null,
+        entityType: "account",
+        entityId: updated.id,
+        type: "account_updated",
+        payload: {
+          accountId: updated.id,
+          accountName: updated.name,
+        },
+      });
       res.json(updated);
     } catch (err: any) {
       res.status(400).json({ message: err.message });
@@ -295,11 +356,25 @@ export async function registerRoutes(
 
   app.post("/api/accounts/:id/campaigns", requireRole("admin", "editor"), async (req, res) => {
     try {
+      const user = req.user as any;
       const campaign = await storage.createCampaign({
         ...req.body,
         accountId: Number(req.params.id),
       });
       await automationService.evaluateCampaign(campaign.id);
+      await notificationCenter.sendNotification({
+        recipientIds: await notificationCenter.getCampaignRelatedUserIds(campaign.id),
+        actorId: user.id,
+        executionId: null,
+        entityType: "campaign",
+        entityId: campaign.id,
+        type: "campaign_created",
+        payload: {
+          campaignId: campaign.id,
+          campaignName: campaign.name,
+          accountId: campaign.accountId,
+        },
+      });
       res.json(campaign);
     } catch (err: any) {
       res.status(400).json({ message: err.message });
@@ -314,9 +389,31 @@ export async function registerRoutes(
 
   app.patch("/api/campaigns/:id", requireRole("admin", "editor"), async (req, res) => {
     try {
-      const updated = await storage.updateCampaign(Number(req.params.id), req.body);
+      const user = req.user as any;
+      const campaignId = Number(req.params.id);
+      const existing = await storage.getCampaign(campaignId);
+      if (!existing) return res.status(404).json({ message: "Not found" });
+      const previousRecipientIds = await notificationCenter.getCampaignRelatedUserIds(campaignId);
+      const updated = await storage.updateCampaign(campaignId, req.body);
       if (!updated) return res.status(404).json({ message: "Not found" });
       await automationService.evaluateCampaign(updated.id);
+      const recipientIds = Array.from(new Set([
+        ...previousRecipientIds,
+        ...(await notificationCenter.getCampaignRelatedUserIds(updated.id)),
+      ]));
+      await notificationCenter.sendNotification({
+        recipientIds,
+        actorId: user.id,
+        executionId: null,
+        entityType: "campaign",
+        entityId: updated.id,
+        type: "campaign_updated",
+        payload: {
+          campaignId: updated.id,
+          campaignName: updated.name,
+          accountId: updated.accountId,
+        },
+      });
       res.json(updated);
     } catch (err: any) {
       res.status(400).json({ message: err.message });
@@ -424,25 +521,19 @@ export async function registerRoutes(
 
     if (exec) {
       const execName = `${exec.brand?.name || ''} - ${exec.title?.name || ''}`;
-      const recipientIds = new Set<number>();
-      if (exec.ownerId && exec.ownerId !== user.id) recipientIds.add(exec.ownerId);
-      if (exec.createdBy && exec.createdBy !== user.id) recipientIds.add(exec.createdBy);
-
-      for (const recipientId of Array.from(recipientIds)) {
-        await storage.createNotification({
-          recipientId,
-          actorId: user.id,
-          executionId,
-          entityType: "execution",
-          entityId: executionId,
-          type: "status_changed",
-          payload: {
-            executionName: execName,
-            oldStatus: oldStatus || "draft",
-            newStatus: req.body.status,
-          },
-        });
-      }
+      await notificationCenter.sendNotification({
+        recipientIds: await notificationCenter.getExecutionRelatedUserIds(executionId),
+        actorId: user.id,
+        executionId,
+        entityType: "execution",
+        entityId: executionId,
+        type: "status_changed",
+        payload: {
+          executionName: execName,
+          oldStatus: oldStatus || "draft",
+          newStatus: req.body.status,
+        },
+      });
     }
 
     await automationService.evaluateExecution(executionId);
@@ -513,8 +604,8 @@ export async function registerRoutes(
 
     if (task.assignedTo && task.assignedTo !== user.id) {
       const exec = await storage.getExecution(executionId);
-      await storage.createNotification({
-        recipientId: task.assignedTo,
+      await notificationCenter.sendNotification({
+        recipientIds: await notificationCenter.getTaskRelatedUserIds(task.id),
         actorId: user.id,
         executionId,
         entityType: "task",
@@ -543,8 +634,8 @@ export async function registerRoutes(
     const execName = exec ? `${exec.brand?.name || ''} - ${exec.title?.name || ''}` : `#${existingTask.executionId}`;
 
     if (req.body.assignedTo && req.body.assignedTo !== existingTask.assignedTo && req.body.assignedTo !== user.id) {
-      await storage.createNotification({
-        recipientId: req.body.assignedTo,
+      await notificationCenter.sendNotification({
+        recipientIds: await notificationCenter.getTaskRelatedUserIds(taskId),
         actorId: user.id,
         executionId: existingTask.executionId,
         entityType: "task",
@@ -555,21 +646,15 @@ export async function registerRoutes(
     }
 
     if (req.body.status === "completed" && existingTask.status !== "completed") {
-      const notifyIds = new Set<number>();
-      if (existingTask.createdBy && existingTask.createdBy !== user.id) notifyIds.add(existingTask.createdBy);
-      if (existingTask.assignedTo && existingTask.assignedTo !== user.id) notifyIds.add(existingTask.assignedTo);
-
-      for (const recipientId of Array.from(notifyIds)) {
-        await storage.createNotification({
-          recipientId,
-          actorId: user.id,
-          executionId: existingTask.executionId,
-          entityType: "task",
-          entityId: taskId,
-          type: "task_completed",
-          payload: { taskTitle: existingTask.title, executionName: execName },
-        });
-      }
+      await notificationCenter.sendNotification({
+        recipientIds: await notificationCenter.getTaskRelatedUserIds(taskId),
+        actorId: user.id,
+        executionId: existingTask.executionId,
+        entityType: "task",
+        entityId: taskId,
+        type: "task_completed",
+        payload: { taskTitle: existingTask.title, executionName: execName },
+      });
     }
 
     await automationService.evaluateTask(taskId);
@@ -580,24 +665,39 @@ export async function registerRoutes(
   app.get("/api/notifications", requireAuth, async (req, res) => {
     const user = req.user as any;
     const limit = req.query.limit ? Number(req.query.limit) : 30;
-    res.json(await storage.getNotifications(user.id, limit));
+    const category = parseNotificationCategory(req.query.category);
+    const actorUserId = parseOptionalId(req.query.actorUserId);
+    res.json(await notificationCenter.listNotificationsForUser(user, { limit, category, actorUserId }));
   });
 
   app.get("/api/notifications/unread-count", requireAuth, async (req, res) => {
     const user = req.user as any;
-    res.json({ count: await storage.getUnreadNotificationCount(user.id) });
+    res.json({ count: await notificationCenter.getUnreadCountForUser(user) });
   });
 
   app.patch("/api/notifications/:id/read", requireAuth, async (req, res) => {
     const user = req.user as any;
-    await storage.markNotificationRead(Number(req.params.id), user.id);
+    await notificationCenter.markNotificationReadForUser(Number(req.params.id), user);
     res.json({ ok: true });
   });
 
   app.post("/api/notifications/mark-all-read", requireAuth, async (req, res) => {
     const user = req.user as any;
-    await storage.markAllNotificationsRead(user.id);
+    await notificationCenter.markAllReadForUser(
+      user,
+      parseNotificationCategory(req.body?.category),
+      parseOptionalId(req.body?.actorUserId),
+    );
     res.json({ ok: true });
+  });
+
+  app.post("/api/notifications/delete-filtered", requireAuth, async (req, res) => {
+    const user = req.user as any;
+    const deleted = await notificationCenter.deleteFilteredNotificationsForUser(user, {
+      category: parseNotificationCategory(req.body?.category),
+      actorUserId: parseOptionalId(req.body?.actorUserId),
+    });
+    res.json({ ok: true, deleted });
   });
 
   // === CONVERSATIONS / CHAT ===
@@ -705,9 +805,9 @@ export async function registerRoutes(
     }
 
     const conv = await storage.getConversation(convId);
-    for (const recipientId of Array.from(mentionedUserIds)) {
-      await storage.createNotification({
-        recipientId,
+    if (mentionedUserIds.size > 0) {
+      await notificationCenter.sendNotification({
+        recipientIds: Array.from(mentionedUserIds),
         actorId: user.id,
         executionId: conv?.executionId || null,
         entityType: "message",

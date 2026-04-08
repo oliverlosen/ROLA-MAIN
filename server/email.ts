@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "./db";
 import { storage } from "./storage";
+import { notificationCenter } from "./notification-center";
 import {
   brands,
   emailAccounts,
@@ -20,7 +21,6 @@ import {
   type EmailMessageWithRecipients,
   type EmailSyncStatus,
   type EmailThreadWithDetails,
-  type InsertNotification,
   emailProviderValues,
 } from "@shared/schema";
 
@@ -1559,18 +1559,17 @@ export class EmailService {
     recipientIds.add(account.userId);
 
     for (const link of links) {
-      const execution = await storage.getExecution(link.executionId);
-      if (execution?.ownerId) recipientIds.add(execution.ownerId);
-      if (execution?.createdBy) recipientIds.add(execution.createdBy);
+      const executionRecipients = await notificationCenter.getExecutionRelatedUserIds(link.executionId);
+      for (const recipientId of executionRecipients) recipientIds.add(recipientId);
       if (link.linkedBy) recipientIds.add(link.linkedBy);
       if (link.task?.id) {
-        const task = await storage.getTask(link.task.id);
-        if (task?.assignedTo) recipientIds.add(task.assignedTo);
-        if (task?.createdBy) recipientIds.add(task.createdBy);
+        const taskRecipients = await notificationCenter.getTaskRelatedUserIds(link.task.id);
+        for (const recipientId of taskRecipients) recipientIds.add(recipientId);
       }
     }
 
-    const notificationBase: Omit<InsertNotification, "recipientId"> = {
+    await notificationCenter.sendNotification({
+      recipientIds: Array.from(recipientIds),
       actorId: null,
       executionId: links[0].executionId,
       entityType: "email",
@@ -1582,14 +1581,7 @@ export class EmailService {
         senderName: sender?.name || sender?.email || "External sender",
         taskId: links[0].task?.id || null,
       },
-    };
-
-    for (const recipientId of Array.from(recipientIds)) {
-      await storage.createNotification({
-        ...notificationBase,
-        recipientId,
-      });
-    }
+    });
   }
 
   private isPendingResponse(thread: Pick<EmailThreadWithDetails, "lastInboundAt" | "lastOutboundAt">): boolean {

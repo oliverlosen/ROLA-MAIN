@@ -1,10 +1,10 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { storage } from "./storage";
+import { notificationCenter } from "./notification-center";
 import {
   assets,
   automationAlerts,
-  crmAccounts,
   crmCampaigns,
   emailLinks,
   emailThreads,
@@ -15,7 +15,6 @@ import {
   type CampaignGanttExecutionItem,
   type CampaignGanttItem,
   type CampaignWithDetails,
-  type CrmCampaign,
   type ExecutionGanttItem,
   type ExecutionPortfolioGanttItem,
   type ExecutionPortfolioGanttResponse,
@@ -307,7 +306,7 @@ class AutomationService {
     const execution = await storage.getExecution(task.executionId);
     if (!execution) return;
 
-    const recipients = this.getExecutionRecipientIds(execution, task.assignedTo, task.createdBy);
+    const recipients = await notificationCenter.getTaskRelatedUserIds(task.id);
     const dueAt = parseDateEnd(task.dueDate);
     const now = Date.now();
     const actionable = isTaskActionable(task);
@@ -381,7 +380,7 @@ class AutomationService {
       storage.getAssets(executionId),
     ]);
 
-    const recipients = this.getExecutionRecipientIds(execution, execution.ownerId, execution.createdBy);
+    const recipients = await notificationCenter.getExecutionRelatedUserIds(execution.id);
     const now = Date.now();
     const targetDate = execution.dueDate || execution.plannedEndDate;
     const dueAt = parseDateEnd(targetDate);
@@ -515,7 +514,7 @@ class AutomationService {
     if (!campaign) return;
 
     const linkedExecutions = await storage.getExecutionsForCampaign(campaignId);
-    const recipientIds = await this.getCampaignRecipientIds(campaign, linkedExecutions);
+    const recipientIds = await notificationCenter.getCampaignRelatedUserIds(campaign.id);
 
     const executionGanttItems = await Promise.all(linkedExecutions.map((execution) => buildExecutionGanttInternal(execution)));
     const outOfWindow = executionGanttItems.filter((item) => {
@@ -564,8 +563,8 @@ class AutomationService {
 
       const task = link.taskId ? await storage.getTask(link.taskId) : null;
       const recipientIds = task
-        ? this.getExecutionRecipientIds(execution, task.assignedTo, task.createdBy)
-        : this.getExecutionRecipientIds(execution, execution.ownerId, execution.createdBy);
+        ? await notificationCenter.getTaskRelatedUserIds(task.id)
+        : await notificationCenter.getExecutionRelatedUserIds(execution.id);
 
       const subject = thread.subject || "No subject";
       await this.setAlertState({
@@ -822,25 +821,6 @@ class AutomationService {
     };
   }
 
-  private getExecutionRecipientIds(
-    execution: ExecutionWithDetails,
-    ...extraIds: Array<number | null | undefined>
-  ) {
-    return sortUniqueNumbers([
-      execution.ownerId,
-      execution.createdBy,
-      ...extraIds,
-    ]);
-  }
-
-  private async getCampaignRecipientIds(campaign: CrmCampaign, linkedExecutions: ExecutionWithDetails[]) {
-    const [account] = await db.select({ ownerId: crmAccounts.ownerId }).from(crmAccounts).where(eq(crmAccounts.id, campaign.accountId));
-    return sortUniqueNumbers([
-      account?.ownerId,
-      ...linkedExecutions.flatMap((execution) => [execution.ownerId, execution.createdBy]),
-    ]);
-  }
-
   private async setAlertState(input: AlertStateInput) {
     const existing = await db.select()
       .from(automationAlerts)
@@ -937,27 +917,25 @@ class AutomationService {
     const uniqueRecipientIds = sortUniqueNumbers(recipientIds);
     if (!uniqueRecipientIds.length) return;
 
-    for (const recipientId of uniqueRecipientIds) {
-      await storage.createNotification({
-        recipientId,
-        actorId: null,
-        executionId: alert.executionId ?? null,
-        entityType: "automation_alert",
-        entityId: alert.id,
-        type: "automation_alert",
-        payload: {
-          ...((alert.payload && typeof alert.payload === "object") ? alert.payload as Record<string, unknown> : {}),
-          alertId: alert.id,
-          title: alert.title,
-          severity: alert.severity,
-          ruleCode: alert.ruleCode,
-          suggestedAction: alert.suggestedAction,
-          executionId: alert.executionId,
-          taskId: alert.taskId,
-          campaignId: alert.campaignId,
-        },
-      });
-    }
+    await notificationCenter.sendNotification({
+      recipientIds: uniqueRecipientIds,
+      actorId: null,
+      executionId: alert.executionId ?? null,
+      entityType: "automation_alert",
+      entityId: alert.id,
+      type: "automation_alert",
+      payload: {
+        ...((alert.payload && typeof alert.payload === "object") ? alert.payload as Record<string, unknown> : {}),
+        alertId: alert.id,
+        title: alert.title,
+        severity: alert.severity,
+        ruleCode: alert.ruleCode,
+        suggestedAction: alert.suggestedAction,
+        executionId: alert.executionId,
+        taskId: alert.taskId,
+        campaignId: alert.campaignId,
+      },
+    });
   }
 
   private async enrichAlerts(rows: AutomationAlert[]): Promise<AutomationAlertWithContext[]> {
